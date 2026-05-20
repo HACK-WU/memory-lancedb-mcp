@@ -22,7 +22,7 @@ export interface ToolDefinition {
   label?: string;
   description: string;
   parameters: unknown; // TypeBox schema
-  execute: (callId: string, params: unknown) => Promise<ToolResult>;
+  execute: (callId: string, params: unknown, signal?: unknown, onUpdate?: unknown, runtimeCtx?: unknown) => Promise<ToolResult>;
 }
 
 export interface ToolResult {
@@ -231,7 +231,7 @@ export class FakeOpenClawApi {
 
     const def = factory(toolCtx);
     const callId = crypto.randomUUID();
-    return def.execute(callId, params);
+    return def.execute(callId, params, undefined, undefined, toolCtx);
   }
 
   /**
