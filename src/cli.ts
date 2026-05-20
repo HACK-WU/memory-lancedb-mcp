@@ -6,6 +6,8 @@
  *   mem list           List memories
  *   mem search <q>     Search memories
  *   mem stats          Show statistics
+ *   mem scope list     List all scopes and counts
+ *   mem scope delete   Delete all memories in a scope
  *   mem config init    Create default config
  *   mem config show    Show current config
  *   mem config path    Show config file path
@@ -20,8 +22,22 @@ import { initConfig, getConfigPath, loadConfig, getDefaultConfigDir } from "./co
 import YAML from "yaml";
 import { existsSync } from "node:fs";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve, join } from "node:path";
 
 const program = new Command();
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/** Resolve dbPath like ~/path → /home/user/path */
+function resolveDbPath(dbPath: string | undefined): string {
+  const raw = (dbPath || "~/.local/share/memory-mcp/lancedb").trim();
+  if (raw.startsWith("~/")) return join(homedir(), raw.slice(2));
+  if (raw === "~") return join(homedir());
+  return resolve(raw);
+}
 
 // ============================================================================
 // Secret Masking Utility
@@ -451,6 +467,101 @@ program
     console.log(`\n${"─".repeat(40)}`);
     console.log(`Results: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);
+  });
+
+// ============================================================================
+// mem scope — Scope management
+// ============================================================================
+
+const scopeCmd = program
+  .command("scope")
+  .description("Manage memory scopes (project isolation)");
+
+scopeCmd
+  .command("list")
+  .description("List all memory scopes and their counts")
+  .option("--config <path>", "Config file path")
+  .action(async (opts) => {
+    try {
+      const configPath = opts.config || getConfigPath();
+      const config = loadConfig(configPath);
+      const dbPath = resolveDbPath(config.dbPath);
+      const vectorDim = config.embedding?.dimensions || 1536;
+
+      // @ts-ignore - dynamic import from parent project dist
+      const { MemoryStore } = await import("../../dist/src/store.js");
+      const store = new MemoryStore({ dbPath, vectorDim });
+
+      const stats = await store.stats();
+
+      console.log("Memory Scopes:");
+      console.log("");
+      console.log("  Scope                  Memories");
+      console.log("  ─────────────────────  ────────");
+
+      const entries = Object.entries(stats.scopeCounts).sort(
+        ([, a], [, b]) => (b as number) - (a as number),
+      );
+      for (const [scope, count] of entries) {
+        const padded = scope.padEnd(23);
+        console.log(`  ${padded} ${count}`);
+      }
+
+      console.log("");
+      console.log(`Total: ${stats.totalCount} memories across ${entries.length} scope(s)`);
+    } catch (err) {
+      console.error(`❌ ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
+scopeCmd
+  .command("delete <scope>")
+  .description("Delete all memories in a scope (requires confirmation)")
+  .option("--yes", "Skip confirmation prompt")
+  .option("--dry-run", "Show what would be deleted without actually deleting")
+  .option("--config <path>", "Config file path")
+  .action(async (scope, opts) => {
+    try {
+      if (scope === "global") {
+        console.error("❌ Cannot delete the 'global' scope. It is system-reserved.");
+        process.exit(1);
+      }
+
+      const configPath = opts.config || getConfigPath();
+      const config = loadConfig(configPath);
+      const dbPath = resolveDbPath(config.dbPath);
+      const vectorDim = config.embedding?.dimensions || 1536;
+
+      // @ts-ignore - dynamic import from parent project dist
+      const { MemoryStore } = await import("../../dist/src/store.js");
+      const store = new MemoryStore({ dbPath, vectorDim });
+
+      const stats = await store.stats();
+      const count = stats.scopeCounts[scope] || 0;
+
+      if (count === 0) {
+        console.log(`Scope "${scope}" has no memories. Nothing to delete.`);
+        return;
+      }
+
+      if (opts.dryRun) {
+        console.log(`DRY RUN: Would delete ${count} memories from scope "${scope}".`);
+        return;
+      }
+
+      if (!opts.yes) {
+        console.log(`⚠  This will permanently delete ${count} memories from scope "${scope}".`);
+        console.log("   Run with --yes to confirm, or --dry-run to preview.");
+        return;
+      }
+
+      const deleted = await store.bulkDelete([scope]);
+      console.log(`✅ Deleted ${deleted} memories from scope "${scope}".`);
+    } catch (err) {
+      console.error(`❌ ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   });
 
 // ============================================================================

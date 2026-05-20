@@ -284,6 +284,19 @@ node ./bin/mem.mjs config show
 node ./bin/mem.mjs config validate
 ```
 
+### Scope 管理
+
+```bash
+# 列出所有 scope 及记忆数
+node ./bin/mem.mjs scope list
+
+# 预览删除（不实际删除）
+node ./bin/mem.mjs scope delete myapp --dry-run
+
+# 删除 scope 内所有记忆（需确认）
+node ./bin/mem.mjs scope delete myapp --yes
+```
+
 ---
 
 ## Multi-Project Isolation
