@@ -4,6 +4,10 @@ MCP Server wrapper for [memory-lancedb-pro](https://github.com/CortexReach/memor
 
 > **独立仓库**: `git@github.com:HACK-WU/memory-lancedb-mcp.git`
 >
+> **父项目**: [github.com/CortexReach/memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro)
+>
+> 感谢 [CortexReach](https://github.com/CortexReach) 团队开源的 memory-lancedb-pro — 本项目基于其核心能力进行 MCP 协议桥接与扩展。
+>
 > 本仓库是一个**独立 MCP 包装器**，通过 FakeOpenClawApi 桥接 memory-lancedb-pro 核心能力。
 > 运行时通过 jiti 直接加载 npm 安装的 `memory-lancedb-pro` TypeScript 源文件，
 > **无需克隆父仓库**，纯 npm install 即可运行。
@@ -45,6 +49,25 @@ MCP Server wrapper for [memory-lancedb-pro](https://github.com/CortexReach/memor
 ```
 
 **核心设计**: FakeOpenClawApi 实现了 memory-lancedb-pro 所需的运行时接口（数据库、嵌入、LLM、事件系统）。包装器通过 jiti 直接从 npm 包加载父项目的 TypeScript 源文件，支持两种传输协议：
+
+---
+
+## 适用场景
+
+memory-lancedb-mcp 适合需要**持久化长期记忆**的 AI 应用：
+
+- **AI 代码助手** — 记住项目架构、编码偏好、常见 Bug 模式，提升代码生成质量
+- **AI 写作/创作** — 记住写作风格、人物设定、读者偏好，保持一致性
+- **AI 客服** — 记住用户画像、历史诉求、解决方案，提供个性化服务
+- **AI 研究助理** — 记住研究方向、文献摘要、关键结论，辅助学术写作
+- **AI 个人助理** — 记住日程偏好、饮食禁忌、旅行习惯，提供精准建议
+- **AI 游戏 NPC** — 记住玩家行为、剧情走向、角色关系，实现动态叙事
+
+核心优势：
+- **多项目隔离**：同一套基础设施为不同项目提供完全独立的记忆空间
+- **语义检索**：基于向量 + BM25 的混合检索，比关键词搜索更准确
+- **自动衰减**：Weibull 衰减模型，自然淡化老旧记忆，保持记忆新鲜度
+- **零配置**：默认配置即可工作，高级选项全部 YAML 化
 - **stdio** — MCP 标准输入输出，适合 Claude Desktop / Cursor / Cline 等本地客户端
 - **SSE** — HTTP 流式传输，支持远程连接和多客户端
 
@@ -377,23 +400,23 @@ node ./bin/mem.mjs stats --scope myapp
 
 | Tool | Description |
 |------|-------------|
-| `memory_recall` | Hybrid search (vector + BM25)，语义检索 |
-| `memory_store` | Store new memory with auto-categorization |
-| `memory_forget` | Delete memory by ID |
-| `memory_update` | Update existing memory text/importance |
-| `memory_stats` | Usage statistics and scope breakdown |
-| `memory_debug` | Retrieval pipeline trace and ranking explanation |
-| `memory_list` | List with filtering (scope, category, time) |
-| `memory_promote` | Promote to governance (high-priority memory) |
-| `memory_archive` | Archive (keep but exclude from recall) |
-| `memory_compact` | Deduplicate and compress memories |
-| `memory_explain_rank` | Explain why memories were ranked this way |
-| `self_improvement_log` | Log improvement suggestions |
-| `self_improvement_extract_skill` | Extract reusable skill from memory |
-| `self_improvement_review` | Review backlog of improvements |
-| `_lifecycle_auto_recall` | Auto-recall (before prompt build) |
-| `_lifecycle_auto_capture` | Auto-capture (after agent end) |
-| `_lifecycle_session_end` | Session cleanup and finalization |
+| `memory_recall` | 混合检索（向量 + BM25），语义召回 |
+| `memory_store` | 存储新记忆，自动分类 |
+| `memory_forget` | 通过 ID 删除记忆 |
+| `memory_update` | 更新已有记忆的文本/重要度 |
+| `memory_stats` | 使用统计和 scope 分布 |
+| `memory_debug` | 检索链路追踪和排名解释 |
+| `memory_list` | 列表查看，支持按 scope/分类/时间过滤 |
+| `memory_promote` | 提升为治理记忆（高优先级） |
+| `memory_archive` | 归档（保留但排除召回） |
+| `memory_compact` | 去重并压缩记忆 |
+| `memory_explain_rank` | 解释记忆排名的原因 |
+| `self_improvement_log` | 记录改进建议 |
+| `self_improvement_extract_skill` | 从记忆中提取可复用技能 |
+| `self_improvement_review` | 审阅待改进项 |
+| `_lifecycle_auto_recall` | 自动召回（prompt 构建前） |
+| `_lifecycle_auto_capture` | 自动捕获（agent 结束后） |
+| `_lifecycle_session_end` | 会话清理和收尾 |
 
 ---
 
@@ -455,4 +478,8 @@ npm test
 
 ## License
 
-MIT
+[MIT](LICENSE)
+
+---
+
+本项目基于 [memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro) 构建，感谢 CortexReach 团队的开源贡献。
