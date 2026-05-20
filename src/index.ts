@@ -49,11 +49,20 @@ export interface RuntimeOptions {
   config?: MemConfig;
   /** Suppress debug logs */
   quiet?: boolean;
+  /** Project scope for memory isolation (e.g. "myapp", "backend-service").
+   *  Sets agentId for all tool calls, creating an isolated agent:<id> scope.
+   *  Different projects = different agent IDs = completely isolated memories. */
+  scope?: string;
 }
 
 // ============================================================================
 // Plugin Loading
 // ============================================================================
+
+/** Sanitize scope string to valid agent scope id */
+function scopeToAgentScope(scope: string): string {
+  return scope.replace(/[^a-zA-Z0-9:_-]/g, "_");
+}
 
 /**
  * Dynamically import the memory-lancedb-pro plugin from npm.
@@ -87,41 +96,65 @@ async function loadPlugin(): Promise<{ register: (api: unknown) => void }> {
  *
  * This is the main entry point for the wrapper. It:
  * 1. Loads config from YAML (or uses provided config)
- * 2. Creates a FakeOpenClawApi
- * 3. Calls plugin.register(fakeApi) — this initializes all core components
- * 4. Returns a runtime object with tool calling, event emission, etc.
+ * 2. If scope is set, overrides scopes.default for project isolation
+ * 3. Creates a FakeOpenClawApi
+ * 4. Calls plugin.register(fakeApi) — this initializes all core components
+ * 5. Returns a runtime object with tool calling, event emission, etc.
  *
  * @example
  * ```typescript
- * const runtime = await createMemoryRuntime({ configPath: "./config.yaml" });
+ * const runtime = await createMemoryRuntime({ scope: "project:myapp" });
+ * // All store/recall operations now scoped to project:myapp
  * const result = await runtime.callTool("memory_store", { text: "hello", importance: 0.8 });
  * ```
  */
 export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise<MemoryRuntime> {
   // 1. Load configuration
-  const config = options.config || loadConfig(options.configPath);
+  const baseConfig = options.config || loadConfig(options.configPath);
 
-  // 2. Create FakeOpenClawApi
+  // 2. Apply scope override (project isolation via agent-based scoping)
+  const config = options.scope
+    ? {
+        ...baseConfig,
+        scopes: {
+          ...(baseConfig.scopes || {}),
+          definitions: {
+            ...(baseConfig.scopes?.definitions || {}),
+            [options.scope]: { description: `Project: ${options.scope}` },
+          },
+          agentAccess: {
+            ...(baseConfig.scopes?.agentAccess || {}),
+            [options.scope]: ["global", scopeToAgentScope(options.scope)],
+          },
+        },
+      }
+    : baseConfig;
+
+  // 3. Create FakeOpenClawApi
   const pluginConfig = toPluginConfig(config);
   const api = new FakeOpenClawApi({
     pluginConfig,
     quiet: options.quiet ?? false,
   });
 
-  // 3. Load and register the plugin
+  // 4. Load and register the plugin
   const plugin = await loadPlugin();
   plugin.register(api);
 
-  // 4. Emit gateway_start to trigger auto-compaction etc.
+  // 5. Emit gateway_start to trigger auto-compaction etc.
   await api.emitEvent("gateway_start", {}, {});
 
-  // 5. Build and return the runtime
+  // 6. Build and return the runtime
   const runtime: MemoryRuntime = {
     api,
     config,
 
     async callTool(name: string, params: Record<string, unknown>, ctx?: ToolCallContext): Promise<ToolResult> {
-      return api.callTool(name, params, ctx);
+      // Inject agentId from scope for per-project isolation
+      const effectiveCtx = options.scope
+        ? { ...ctx, agentId: options.scope }
+        : ctx;
+      return api.callTool(name, params, effectiveCtx);
     },
 
     listTools(): ToolInfo[] {

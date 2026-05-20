@@ -75,8 +75,9 @@ program
 
 program
   .command("serve")
-  .description("Start MCP Server (stdio mode by default)")
+  .description("Start MCP Server (stdio mode by default). Use --scope for per-project memory isolation.")
   .option("-c, --config <path>", "Config file path")
+  .option("-s, --scope <scope>", "Default scope for all operations (e.g. project:myapp, agent:bot1). Isolates memories per project.")
   .option("--dry-run", "Validate config and list tools without starting server")
   .option("--sse", "Use SSE (HTTP) transport instead of stdio")
   .option("-p, --port <n>", "SSE server port (default: 3100)", "3100")
@@ -88,10 +89,12 @@ program
         // Validate config and show tools
         const runtime = await createMemoryRuntime({
           configPath: opts.config,
+          scope: opts.scope,
           quiet: true,
         });
         const tools = runtime.listTools();
         console.log("✅ Config valid. Tools registered:");
+        if (opts.scope) console.log(`   Scope: ${opts.scope}`);
         for (const tool of tools) {
           console.log(`  - ${tool.name}: ${tool.description.slice(0, 60)}...`);
         }
@@ -109,6 +112,7 @@ program
         }
         await startSseServer({
           configPath: opts.config,
+          scope: opts.scope,
           quiet: opts.quiet ?? false,
           port,
           host: opts.host,
@@ -116,6 +120,7 @@ program
       } else {
         await startMcpServer({
           configPath: opts.config,
+          scope: opts.scope,
           quiet: opts.quiet ?? true,
         });
       }

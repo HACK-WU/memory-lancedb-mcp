@@ -9,6 +9,7 @@ MCP Server wrapper for [memory-lancedb-pro](https://github.com/CortexReach/memor
 ## Features
 
 - **17 个记忆工具**暴露为 MCP tools（recall, store, forget, update, stats, list, debug, promote, archive, compact, explain_rank, self-improvement, 以及 3 个生命周期工具）
+- **多项目隔离** — `--scope` 参数按 project 隔离记忆，互不干扰
 - **智能生命周期桥接** — `before_prompt_build`（auto-recall）和 `agent_end`（auto-capture）
 - **双传输模式** — stdio（默认，本地 MCP 客户端）和 SSE（HTTP，远程/多客户端）
 - **零侵入** — 不修改 memory-lancedb-pro 一行代码
@@ -237,6 +238,10 @@ node ./bin/mem.mjs serve
 # 方式二: npm link 注册后直接调用
 mem serve
 
+# 指定项目 scope（多项目记忆隔离）
+node ./bin/mem.mjs serve --scope myapp
+node ./bin/mem.mjs serve --scope backend-service
+
 # 启动 SSE 模式
 node ./bin/mem.mjs serve --sse --port 3100 --host 0.0.0.0
 
@@ -277,6 +282,61 @@ node ./bin/mem.mjs config show
 
 # 验证配置格式
 node ./bin/mem.mjs config validate
+```
+
+---
+
+## Multi-Project Isolation
+
+通过 `--scope` 参数实现不同项目之间的记忆完全隔离：
+
+### 工作原理
+
+memory-lancedb-pro 基于 **agent scope** 进行隔离。每个 `--scope` 值会被映射为一个独立的 agent ID，所有存储和检索操作自动限定在该 scope 内。
+
+```
+项目 A: mem serve --scope myapp      → scope agent:myapp
+项目 B: mem serve --scope backend     → scope agent:backend
+项目 C: mem serve --scope docs-site   → scope agent:docs-site
+```
+
+三条记忆互不交叉，`memory_recall`、`memory_list`、`memory_stats` 均只返回各自项目的记忆。
+
+### 使用示例
+
+```bash
+# 启动项目 A 的 MCP Server（stdio 模式）
+node ./bin/mem.mjs serve --scope myapp
+# 所有 memory_store / memory_recall 操作自动限定在 myapp
+
+# 启动项目 B 的 SSE 服务
+node ./bin/mem.mjs serve --sse --port 3101 --scope backend
+
+# CLI 查看特定项目的记忆
+node ./bin/mem.mjs list --scope myapp --limit 10
+node ./bin/mem.mjs search "TypeScript" --scope myapp
+node ./bin/mem.mjs stats --scope myapp
+```
+
+### MCP 客户端配置（多项目）
+
+在 MCP 客户端配置中为不同项目指定不同的 scope：
+
+```json
+{
+  "mcpServers": {
+    "memory-app-a": {
+      "command": "node",
+      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve", "--scope", "myapp"],
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    },
+    "memory-app-b": {
+      "command": "node",
+      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve", "--scope", "backend"],
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
 ```
 
 ---
