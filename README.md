@@ -4,7 +4,9 @@ MCP Server wrapper for [memory-lancedb-pro](https://github.com/CortexReach/memor
 
 > **独立仓库**: `git@github.com:HACK-WU/memory-lancedb-mcp.git`
 >
-> 本仓库是一个**独立 MCP 包装器**，通过 FakeOpenClawApi 桥接 memory-lancedb-pro 核心能力。运行时需要先构建好 parent project 的 `dist/` 产物，包装器负责将其暴露为标准的 MCP Server。
+> 本仓库是一个**独立 MCP 包装器**，通过 FakeOpenClawApi 桥接 memory-lancedb-pro 核心能力。
+> 运行时通过 jiti 直接加载 npm 安装的 `memory-lancedb-pro` TypeScript 源文件，
+> **无需克隆父仓库**，纯 npm install 即可运行。
 
 ## Features
 
@@ -34,15 +36,15 @@ MCP Server wrapper for [memory-lancedb-pro](https://github.com/CortexReach/memor
 │                    │  FakeOpenClawApi     │          │
 │                    └─────────┬───────────┘          │
 └──────────────────────────────┼───────────────────────┘
-                               │ import("../../dist/index.js")
+                               │ jiti("memory-lancedb-pro")
                     ┌──────────▼──────────┐
-│        memory-lancedb-pro (unmodified)    │
+│        memory-lancedb-pro (from npm)     │
 │   14 tools · hybrid retrieval · LanceDB    │
 │   Weibull decay · Smart extraction        │
 └──────────────────────────────────────────┘
 ```
 
-**核心设计**: FakeOpenClawApi 实现了 memory-lancedb-pro 所需的运行时接口（数据库、嵌入、LLM、事件系统）。包装器将 OpenClaw 插件注册为标准的 MCP Server，支持两种传输协议：
+**核心设计**: FakeOpenClawApi 实现了 memory-lancedb-pro 所需的运行时接口（数据库、嵌入、LLM、事件系统）。包装器通过 jiti 直接从 npm 包加载父项目的 TypeScript 源文件，支持两种传输协议：
 - **stdio** — MCP 标准输入输出，适合 Claude Desktop / Cursor / Cline 等本地客户端
 - **SSE** — HTTP 流式传输，支持远程连接和多客户端
 
@@ -56,46 +58,21 @@ MCP Server wrapper for [memory-lancedb-pro](https://github.com/CortexReach/memor
 - Git
 - 嵌入 API 密钥（OpenAI / SiliconFlow / Ollama 等）
 
-### 1. Clone both repositories
+### 1. Clone and install
 
 ```bash
-# Clone the MCP wrapper (this repo)
 git clone git@github.com:HACK-WU/memory-lancedb-mcp.git
 cd memory-lancedb-mcp
-
-# Clone parent project (needed at build time)
-git clone https://github.com/CortexReach/memory-lancedb-pro.git ../memory-lancedb-pro
-```
-
-### 2. Build parent project
-
-```bash
-cd ../memory-lancedb-pro
-npm install --ignore-scripts
-# dist/ already pre-built; if missing: npx tsc
-```
-
-### 3. Build wrapper
-
-```bash
-# Back in mcp wrapper dir
-cd memory-lancedb-mcp
-npm install --ignore-scripts
+npm install
 npx tsc
-
-# Register mem CLI to PATH (optional but recommended)
-npm link
 ```
 
-### 4. Initialize configuration
+`npm install` 会自动安装 `memory-lancedb-pro@beta`（含所有子依赖，包括 LanceDB）。
+
+### 2. Initialize configuration
 
 ```bash
-# 方式一: 直接 node 启动（任何环境通用）
 node ./bin/mem.mjs config init
-
-# 方式二: npm link 后直接用 mem 命令
-mem config init
-
 # Creates ~/.config/memory-mcp/config.yaml
 ```
 
@@ -126,6 +103,48 @@ embedding:
   model: "nomic-embed-text"
   baseURL: "http://localhost:11434"
   dimensions: 768
+```
+
+### 3. Skip the parent project clone
+
+**以前需要** clone 父仓库并手动 `tsc` 编译 dist/，现在已经不再需要。
+memory-lancedb-mcp 通过 `jiti` 直接从 `node_modules/memory-lancedb-pro/` 加载 TypeScript 源文件，零额外步骤。
+
+### Platform-Specific Notes
+
+#### Linux (x64)
+
+```bash
+# LanceDB 需要 AVX2 指令集。如果报错 "Illegal instruction"：
+# → 使用 
+   AVX-only 构建或 ARM64 兼容版本
+
+# 如缺少原生模块，手动安装：
+npm install @lancedb/lancedb-linux-x64-gnu
+```
+
+#### WSL (Windows Subsystem for Linux)
+
+```bash
+# WSL 下 npm 可能检测为 Windows 平台，缺少 Linux 原生模块
+# 报错: Cannot find module '@lancedb/lancedb-linux-x64-gnu'
+#
+# 解决方案 — 手动安装 Linux 原生模块：
+npm pack @lancedb/lancedb-linux-x64-gnu --pack-destination /tmp
+cd node_modules/@lancedb/
+mkdir -p lancedb-linux-x64-gnu
+tar -xzf /tmp/lancedb-lancedb-linux-x64-gnu-*.tgz -C lancedb-linux-x64-gnu/ --strip-components=1
+```
+
+#### macOS
+
+无需额外操作，LanceDB 原生模块自动安装。
+
+#### ARM64 / Apple Silicon
+
+确保使用 ARM64 原生模块。如遇问题：
+```bash
+npm rebuild @lancedb/lancedb
 ```
 
 ---

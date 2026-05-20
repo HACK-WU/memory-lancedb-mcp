@@ -9,6 +9,7 @@
 import { FakeOpenClawApi, type ToolCallContext, type ToolResult } from "./fake-api.js";
 import { loadConfig, toPluginConfig, type MemConfig } from "./config.js";
 import { extractInputSchema, type JsonSchema } from "./schema.js";
+import { createJiti } from "jiti";
 
 // ============================================================================
 // Types
@@ -65,15 +66,24 @@ function scopeToAgentScope(scope: string): string {
 }
 
 /**
- * Dynamically import the memory-lancedb-pro plugin from npm.
- * The plugin exports a default object with { id, register(api) }.
+ * Load the memory-lancedb-pro plugin from npm using jiti.
+ * jiti compiles TypeScript on-the-fly, allowing us to use the npm-published
+ * source files directly without needing a local build of the parent project.
  */
 async function loadPlugin(): Promise<{ register: (api: unknown) => void }> {
   try {
-        // Runtime: import local compiled dist (npm pkg provides deps like LanceDB)
-    // @ts-ignore - dynamic import of local dist
-    const mod = await import("../../dist/index.js");
-    const plugin = mod.default || mod;
+    // Use jiti to load TS source directly from node_modules
+    // Falls back to local dist/ if available (development mode)
+    const jiti = createJiti(import.meta.url);
+    let mod: Record<string, unknown>;
+    try {
+      mod = jiti("memory-lancedb-pro") as Record<string, unknown>;
+    } catch {
+      // Fallback: local dist for development
+      // @ts-ignore - local dist has no type declarations
+      mod = await import("../../dist/index.js") as Record<string, unknown>;
+    }
+    const plugin = (mod.default || mod) as { register: (api: unknown) => void };
     if (typeof plugin.register !== "function") {
       throw new Error("Plugin does not export a register() function");
     }

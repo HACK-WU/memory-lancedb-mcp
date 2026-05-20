@@ -24,6 +24,7 @@ import { existsSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
+import { createJiti } from "jiti";
 
 const program = new Command();
 
@@ -37,6 +38,20 @@ function resolveDbPath(dbPath: string | undefined): string {
   if (raw.startsWith("~/")) return join(homedir(), raw.slice(2));
   if (raw === "~") return join(homedir());
   return resolve(raw);
+}
+
+/** Dynamically load MemoryStore from npm package (with local dist fallback) */
+async function loadMemoryStore(): Promise<new (opts: { dbPath: string; vectorDim: number }) => {
+  stats: () => Promise<{ scopeCounts: Record<string, number>; totalCount: number }>;
+  bulkDelete: (scope: string[], ts?: number) => Promise<number>;
+}> {
+  const jiti = createJiti(import.meta.url);
+  try {
+    return jiti("memory-lancedb-pro/src/store").MemoryStore as never;
+  } catch {
+    // @ts-ignore - fallback to local dist for development
+    return (await import("../../dist/src/store.js")).MemoryStore as never;
+  }
 }
 
 // ============================================================================
@@ -488,8 +503,7 @@ scopeCmd
       const dbPath = resolveDbPath(config.dbPath);
       const vectorDim = config.embedding?.dimensions || 1536;
 
-      // @ts-ignore - dynamic import from parent project dist
-      const { MemoryStore } = await import("../../dist/src/store.js");
+      const MemoryStore = await loadMemoryStore();
       const store = new MemoryStore({ dbPath, vectorDim });
 
       const stats = await store.stats();
@@ -533,8 +547,7 @@ scopeCmd
       const dbPath = resolveDbPath(config.dbPath);
       const vectorDim = config.embedding?.dimensions || 1536;
 
-      // @ts-ignore - dynamic import from parent project dist
-      const { MemoryStore } = await import("../../dist/src/store.js");
+      const MemoryStore = await loadMemoryStore();
       const store = new MemoryStore({ dbPath, vectorDim });
 
       const stats = await store.stats();
