@@ -1,16 +1,10 @@
 # memory-lancedb-mcp
 
-MCP Server wrapper for [memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro) — zero-modification adapter that replaces the OpenClaw runtime with the Model Context Protocol.
+为 AI 应用提供**持久化长期记忆**的 MCP Server。支持语义检索、多项目隔离、自动分类与衰减，让 AI 助手记住用户偏好、项目架构、历史决策等关键信息，实现越用越懂你的个性化体验。
 
-> **独立仓库**: `git@github.com:HACK-WU/memory-lancedb-mcp.git`
->
-> **父项目**: [github.com/CortexReach/memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro)
->
-> 感谢 [CortexReach](https://github.com/CortexReach) 团队开源的 memory-lancedb-pro — 本项目基于其核心能力进行 MCP 协议桥接与扩展。
->
-> 本仓库是一个**独立 MCP 包装器**，通过 FakeOpenClawApi 桥接 memory-lancedb-pro 核心能力。
-> 运行时通过 jiti 直接加载 npm 安装的 `memory-lancedb-pro` TypeScript 源文件，
-> **无需克隆父仓库**，纯 npm install 即可运行。
+**核心能力来自** [memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro) — 一个由 [CortexReach](https://github.com/CortexReach) 团队开源的 LanceDB 向量记忆引擎，提供混合检索（向量 + BM25）、Weibull 衰减、智能提取等企业级记忆管理功能。
+
+> 感谢 CortexReach 团队开源 memory-lancedb-pro，本项目基于其核心能力进行 MCP 协议桥接与扩展。
 
 ## Features
 
