@@ -1,0 +1,44 @@
+{
+  "name": "memory-lancedb-mcp",
+  "version": "0.1.0",
+  "description": "MCP Server wrapper for memory-lancedb-pro — zero-modification adapter replacing OpenClaw runtime",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mem": "./bin/mem.mjs"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js serve",
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "lancedb",
+    "ai-memory",
+    "long-term-memory",
+    "model-context-protocol"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "commander": "^14.0.0",
+    "yaml": "^2.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@sinclair/typebox": "0.34.48",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist/**/*",
+    "bin/**/*",
+    "README.md"
+  ]
+}
