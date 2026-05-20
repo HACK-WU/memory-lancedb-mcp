@@ -71,21 +71,30 @@ git clone https://github.com/CortexReach/memory-lancedb-pro.git ../memory-lanced
 ```bash
 cd ../memory-lancedb-pro
 npm install --ignore-scripts
-# dist/ should already exist. If not, run: npx tsc
+# dist/ already pre-built; if missing: npx tsc
 ```
 
 ### 3. Build wrapper
 
 ```bash
+# Back in mcp wrapper dir
 cd memory-lancedb-mcp
 npm install --ignore-scripts
 npx tsc
+
+# Register mem CLI to PATH (optional but recommended)
+npm link
 ```
 
 ### 4. Initialize configuration
 
 ```bash
-./bin/mem.mjs config init
+# 方式一: 直接 node 启动（任何环境通用）
+node ./bin/mem.mjs config init
+
+# 方式二: npm link 后直接用 mem 命令
+mem config init
+
 # Creates ~/.config/memory-mcp/config.yaml
 ```
 
@@ -216,52 +225,58 @@ mem serve --sse --port 3100 --host 0.0.0.0
 
 ## CLI Usage
 
+> **提示**: 如果 node 不在 PATH 中，所有 `mem` 命令替换为 `node ./bin/mem.mjs`。
+> 推荐执行 `npm link` 后直接用 `mem` 命令。
+
 ### 服务管理
 
 ```bash
-# 启动 stdio MCP Server（默认，供客户端使用）
+# 方式一: 直接 node 启动（任何环境通用）
+node ./bin/mem.mjs serve
+
+# 方式二: npm link 注册后直接调用
 mem serve
 
 # 启动 SSE 模式
-mem serve --sse --port 3100 --host 0.0.0.0
+node ./bin/mem.mjs serve --sse --port 3100 --host 0.0.0.0
 
 # 验证配置（不启动服务）
-mem serve --dry-run
+node ./bin/mem.mjs serve --dry-run
 
 # 健康检查
-mem doctor
+node ./bin/mem.mjs doctor
 ```
 
 ### 记忆操作
 
 ```bash
 # 列出最近记忆
-mem list --limit 10
+node ./bin/mem.mjs list --limit 10
 
 # 语义搜索
-mem search "TypeScript 包管理器" --limit 5
+node ./bin/mem.mjs search "TypeScript 包管理器" --limit 5
 
-# 存储记忆（直接在命令行输入）
-mem store "我喜欢使用 pnpm 作为包管理器"
+# 存储记忆
+node ./bin/mem.mjs store "我喜欢使用 pnpm 作为包管理器"
 
 # 查看统计
-mem stats
+node ./bin/mem.mjs stats
 
 # 删除记忆
-mem delete <memory-id>
+node ./bin/mem.mjs delete <memory-id>
 ```
 
 ### 配置管理
 
 ```bash
 # 初始化配置文件
-mem config init
+node ./bin/mem.mjs config init
 
 # 查看当前配置（敏感信息已脱敏）
-mem config show
+node ./bin/mem.mjs config show
 
 # 验证配置格式
-mem config validate
+node ./bin/mem.mjs config validate
 ```
 
 ---
