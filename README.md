@@ -333,6 +333,19 @@ node ./bin/mem.mjs scope delete myapp --dry-run
 node ./bin/mem.mjs scope delete myapp --yes
 ```
 
+### MCP 工具中的 Scope 参数
+
+以下 MCP 工具均支持 `scope` 参数，可在调用时指定操作范围：
+
+| 工具 | scope 参数 |
+|------|-----------|
+| `memory_store` | 指定记忆写入的 scope |
+| `memory_recall` | 限定搜索范围 |
+| `memory_stats` | 过滤统计信息 |
+| `memory_list` | 过滤列表结果 |
+
+> **注意**：agent 只能操作自身 scope 内的记忆。如需跨 scope 操作，请通过 `--scope` 启动独立服务实例。
+
 ---
 
 ## Multi-Project Isolation
@@ -350,6 +363,16 @@ memory-lancedb-pro 基于 **agent scope** 进行隔离。每个 `--scope` 值会
 ```
 
 三条记忆互不交叉，`memory_recall`、`memory_list`、`memory_stats` 均只返回各自项目的记忆。
+
+### 权限模型
+
+| 启动方式 | 可操作的 Scope |
+|----------|---------------|
+| 未指定 `--scope`（默认 agent:main） | 仅 `agent:main`、`global` |
+| `--scope myapp` | 仅 `agent:myapp`、`global` |
+| `--scope backend` | 仅 `agent:backend`、`global` |
+
+`memory_store` 指定 `scope:"agent:test-project"` 时会被拒绝，除非服务以 `--scope test-project` 启动。这是安全特性，防止项目间的记忆交叉污染。
 
 ### 使用示例
 
