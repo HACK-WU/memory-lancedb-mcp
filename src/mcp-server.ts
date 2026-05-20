@@ -97,7 +97,7 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
       if (result && Array.isArray(result.content)) {
         return {
           content: result.content.map((item) => ({
-            type: item.type === "text" ? ("text" as const) : ("text" as const),
+            type: (item.type === "text" ? "text" : (item.type as string) || "text") as "text" | "image" | "resource",
             text: typeof item.text === "string" ? item.text : JSON.stringify(item.text),
           })),
         };

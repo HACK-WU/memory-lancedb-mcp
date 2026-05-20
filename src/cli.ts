@@ -17,10 +17,52 @@ import { startMcpServer } from "./mcp-server.js";
 import { startSseServer } from "./mcp-server-sse.js";
 import { createMemoryRuntime } from "./index.js";
 import { initConfig, getConfigPath, loadConfig, getDefaultConfigDir } from "./config.js";
+import YAML from "yaml";
 import { existsSync } from "node:fs";
 import { readFileSync } from "node:fs";
 
 const program = new Command();
+
+// ============================================================================
+// Secret Masking Utility
+// ============================================================================
+
+function maskSecrets(obj: unknown): unknown {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === "string") return obj;
+  if (Array.isArray(obj)) return obj.map(maskSecrets);
+  if (typeof obj !== "object") return obj;
+
+  const record = obj as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (/apiKey$/i.test(key) || /secret$/i.test(key) || /password$/i.test(key)) {
+      if (typeof value === "string") {
+        // Preserve env var references like ${OPENAI_API_KEY}
+        if (value.startsWith("${")) {
+          result[key] = value;
+        } else if (value.length > 8) {
+          result[key] = `${value.slice(0, 4)}...${value.slice(-4)}`;
+        } else {
+          result[key] = "****";
+        }
+      } else if (Array.isArray(value)) {
+        result[key] = value.map((v: unknown) => {
+          if (typeof v === "string") {
+            if (v.startsWith("${")) return v;
+            return v.length > 8 ? `${v.slice(0, 4)}...${v.slice(-4)}` : "****";
+          }
+          return "****";
+        });
+      } else {
+        result[key] = "****";
+      }
+    } else {
+      result[key] = maskSecrets(value);
+    }
+  }
+  return result;
+}
 
 program
   .name("mem")
@@ -60,10 +102,15 @@ program
       }
 
       if (opts.sse) {
+        const port = parseInt(opts.port, 10);
+        if (isNaN(port) || port < 1 || port > 65535) {
+          console.error("❌ Invalid port number. Must be 1-65535.");
+          process.exit(1);
+        }
         await startSseServer({
           configPath: opts.config,
           quiet: opts.quiet ?? false,
-          port: parseInt(opts.port, 10),
+          port,
           host: opts.host,
         });
       } else {
@@ -94,10 +141,17 @@ program
   .action(async (opts) => {
     try {
       const runtime = await createMemoryRuntime({ configPath: opts.config, quiet: true });
-      const params: Record<string, unknown> = {
-        limit: parseInt(opts.limit, 10),
-        offset: parseInt(opts.offset, 10),
-      };
+      const limit = parseInt(opts.limit, 10);
+      const offset = parseInt(opts.offset, 10);
+      if (isNaN(limit) || limit < 0) {
+        console.error("❌ Invalid limit value.");
+        process.exit(1);
+      }
+      if (isNaN(offset) || offset < 0) {
+        console.error("❌ Invalid offset value.");
+        process.exit(1);
+      }
+      const params: Record<string, unknown> = { limit, offset };
       if (opts.scope) params.scope = opts.scope;
       if (opts.category) params.category = opts.category;
 
@@ -129,9 +183,14 @@ program
   .action(async (query, opts) => {
     try {
       const runtime = await createMemoryRuntime({ configPath: opts.config, quiet: true });
+      const searchLimit = parseInt(opts.limit, 10);
+      if (isNaN(searchLimit) || searchLimit < 1) {
+        console.error("❌ Invalid limit value.");
+        process.exit(1);
+      }
       const params: Record<string, unknown> = {
         query,
-        limit: parseInt(opts.limit, 10),
+        limit: searchLimit,
       };
       if (opts.scope) params.scope = opts.scope;
 
@@ -193,9 +252,14 @@ program
   .action(async (text, opts) => {
     try {
       const runtime = await createMemoryRuntime({ configPath: opts.config, quiet: true });
+      const importance = parseFloat(opts.importance);
+      if (isNaN(importance) || importance < 0 || importance > 1) {
+        console.error("❌ Invalid importance value. Must be 0-1.");
+        process.exit(1);
+      }
       const params: Record<string, unknown> = {
         text,
-        importance: parseFloat(opts.importance),
+        importance,
       };
       if (opts.category) params.category = opts.category;
       if (opts.scope) params.scope = opts.scope;
@@ -262,25 +326,20 @@ configCmd
 configCmd
   .command("show")
   .description("Show current configuration (with secrets masked)")
-  .action(() => {
+  .action(async () => {
     try {
       const path = getConfigPath();
       if (!existsSync(path)) {
         console.error(`No config found. Run 'mem config init' first.`);
         process.exit(1);
       }
+
+      // Parse YAML, mask secrets in structure, re-serialize
       const raw = readFileSync(path, "utf-8");
-      // Mask API keys
-      const masked = raw.replace(
-        /(apiKey:\s*["']?)([^"'\n]+)/g,
-        (_match: string, prefix: string, value: string) => {
-          if (value.startsWith("${")) return `${prefix}${value}`;
-          if (value.length > 8) return `${prefix}${value.slice(0, 4)}...${value.slice(-4)}`;
-          return `${prefix}****`;
-        }
-      );
+      const parsed = YAML.parse(raw);
+      const masked = maskSecrets(parsed);
       console.log(`# Config: ${path}\n`);
-      console.log(masked);
+      console.log(YAML.stringify(masked));
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);

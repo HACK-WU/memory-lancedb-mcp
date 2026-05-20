@@ -306,6 +306,6 @@ export function initConfig(force = false): string {
     mkdirSync(dir, { recursive: true });
   }
 
-  writeFileSync(configPath, DEFAULT_CONFIG_TEMPLATE, "utf-8");
+  writeFileSync(configPath, DEFAULT_CONFIG_TEMPLATE, { encoding: "utf-8", mode: 0o600 });
   return configPath;
 }

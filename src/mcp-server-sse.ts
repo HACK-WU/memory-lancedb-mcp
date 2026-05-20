@@ -22,6 +22,7 @@ import {
   type Message,
 } from "./lifecycle.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { Buffer } from "node:buffer";
 
 // ============================================================================
 // Types
@@ -106,11 +107,14 @@ export async function startSseServer(options: SseServerOptions = {}): Promise<vo
         "Connection": "keep-alive",
       });
 
-      // Send endpoint info
-      res.write(`data: ${JSON.stringify({ endpoint: "/message" })}\n\n`);
+      // MCP SSE spec: send event: endpoint with the message URL
+      res.write("event: endpoint\ndata: /message\n\n");
 
       clients.add(res);
       req.on("close", () => {
+        clients.delete(res);
+      });
+      res.on("error", () => {
         clients.delete(res);
       });
       return;
@@ -118,24 +122,31 @@ export async function startSseServer(options: SseServerOptions = {}): Promise<vo
 
     // Message endpoint (JSON-RPC)
     if (url.pathname === "/message" && req.method === "POST") {
-      let body = "";
+      // Collect body as Buffer to avoid multi-byte UTF-8 split corruption
+      const chunks: Buffer[] = [];
       for await (const chunk of req) {
-        body += chunk;
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
       }
+      const body = Buffer.concat(chunks).toString("utf-8");
 
       try {
         const request = JSON.parse(body);
         const response = await handleJsonRpc(request, handlers);
 
-        // Send response to the requesting client
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(response));
+        // MCP SSE spec: respond via SSE stream (202 Accepted), not HTTP body
+        res.writeHead(202, { "Content-Type": "application/json" });
+        res.end();
 
-        // Also broadcast to SSE clients (for notification support)
-        if (response && response.result) {
-          const sseData = `data: ${JSON.stringify(response)}\n\n`;
+        // Send response only to the first connected SSE client
+        // (In a single-client stdio-like session, there's typically one SSE client)
+        if (response && clients.size > 0) {
+          const sseData = `event: message\ndata: ${JSON.stringify(response)}\n\n`;
           for (const client of clients) {
-            client.write(sseData);
+            try {
+              client.write(sseData);
+            } catch {
+              clients.delete(client);
+            }
           }
         }
       } catch (err) {

@@ -56,14 +56,13 @@ export interface RuntimeOptions {
 // ============================================================================
 
 /**
- * Dynamically import the memory-lancedb-pro plugin.
- * Uses relative path to the parent project's dist/ output.
+ * Dynamically import the memory-lancedb-pro plugin from npm.
  * The plugin exports a default object with { id, register(api) }.
  */
 async function loadPlugin(): Promise<{ register: (api: unknown) => void }> {
   try {
-    // Relative from mcp-wrapper/dist/ → parent dist/index.js
-    // @ts-ignore - dynamic import of parent project compiled output
+        // Runtime: import local compiled dist (npm pkg provides deps like LanceDB)
+    // @ts-ignore - dynamic import of local dist
     const mod = await import("../../dist/index.js");
     const plugin = mod.default || mod;
     if (typeof plugin.register !== "function") {
@@ -73,7 +72,7 @@ async function loadPlugin(): Promise<{ register: (api: unknown) => void }> {
   } catch (err) {
     throw new Error(
       `Failed to load memory-lancedb-pro plugin.\n` +
-      `Make sure the parent project is built (npm run build in project root).\n` +
+      `Install it: npm install memory-lancedb-pro@beta\n` +
       `Original error: ${err}`
     );
   }
