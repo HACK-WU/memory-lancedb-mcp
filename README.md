@@ -260,91 +260,145 @@ mem serve --sse --port 3100 --host 0.0.0.0
 
 ---
 
-## CLI Usage
+## CLI Reference
 
-> **提示**: 如果 node 不在 PATH 中，所有 `mem` 命令替换为 `node ./bin/mem.mjs`。
-> 推荐执行 `npm link` 后直接用 `mem` 命令。
+> **提示**：如果 node 不在 PATH 中，所有 `mem` 替换为 `node ./bin/mem.mjs`。
+> 所有命令均支持 `--config <path>` 指定配置文件。
 
-### 服务管理
+### serve — 启动 MCP 服务
+
+```
+mem serve [options]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-c, --config <path>` | 配置文件路径 |
+| `-s, --scope <scope>` | 项目隔离 scope（如 myapp） |
+| `--sse` | 切换为 SSE 模式（默认 stdio） |
+| `-p, --port <n>` | SSE 端口（默认 3100） |
+| `--host <host>` | SSE 绑定地址（默认 127.0.0.1） |
+| `--dry-run` | 验证配置并列出工具，不启动服务 |
+| `-q, --quiet` | 抑制调试日志 |
 
 ```bash
-# 方式一: 直接 node 启动（任何环境通用）
-node ./bin/mem.mjs serve
-
-# 方式二: npm link 注册后直接调用
+# stdio 模式（本地 MCP 客户端）
 mem serve
 
-# 指定项目 scope（多项目记忆隔离）
-node ./bin/mem.mjs serve --scope myapp
-node ./bin/mem.mjs serve --scope backend-service
+# 指定项目 scope
+mem serve --scope myapp
 
-# 启动 SSE 模式
-node ./bin/mem.mjs serve --sse --port 3100 --host 0.0.0.0
+# SSE 模式（远程或 docker）
+mem serve --sse --port 3100 --host 0.0.0.0
 
-# 验证配置（不启动服务）
-node ./bin/mem.mjs serve --dry-run
-
-# 健康检查
-node ./bin/mem.mjs doctor
+# 预览注册的工具
+mem serve --dry-run
 ```
 
-### 记忆操作
+### store — 存储记忆
+
+```
+mem store <text> [options]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-c, --category <cat>` | 记忆分类：`preference` / `fact` / `decision` / `entity` / `other` |
+| `-i, --importance <n>` | 重要度 0-1（默认 0.7） |
+| `-s, --scope <scope>` | 目标 scope |
 
 ```bash
-# 列出最近记忆
-node ./bin/mem.mjs list --limit 10
-
-# 语义搜索
-node ./bin/mem.mjs search "TypeScript 包管理器" --limit 5
-
-# 存储记忆
-node ./bin/mem.mjs store "我喜欢使用 pnpm 作为包管理器"
-
-# 查看统计
-node ./bin/mem.mjs stats
-
-# 删除记忆
-node ./bin/mem.mjs delete <memory-id>
+mem store "用户偏好使用 pnpm" -c preference -i 0.9
+mem store "项目基于 LanceDB 存储" -c fact --scope myapp
 ```
 
-### 配置管理
+### search — 语义搜索
+
+```
+mem search <query> [options]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-s, --scope <scope>` | 限定 scope |
+| `-l, --limit <n>` | 最大结果数（默认 5） |
+| `--json` | JSON 输出 |
 
 ```bash
-# 初始化配置文件
-node ./bin/mem.mjs config init
-
-# 查看当前配置（敏感信息已脱敏）
-node ./bin/mem.mjs config show
-
-# 验证配置格式
-node ./bin/mem.mjs config validate
+mem search "包管理器偏好" -s myapp -l 10
+mem search "数据库选型" --json
 ```
 
-### Scope 管理
+### list — 列表查看
+
+```
+mem list [options]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-s, --scope <scope>` | scope 过滤 |
+| `-c, --category <cat>` | category 过滤 |
+| `-l, --limit <n>` | 最大条数（默认 10） |
+| `--offset <n>` | 分页偏移（默认 0） |
+| `--json` | JSON 输出 |
 
 ```bash
-# 列出所有 scope 及记忆数
-node ./bin/mem.mjs scope list
-
-# 预览删除（不实际删除）
-node ./bin/mem.mjs scope delete myapp --dry-run
-
-# 删除 scope 内所有记忆（需确认）
-node ./bin/mem.mjs scope delete myapp --yes
+mem list -s myapp -c preference -l 20
+mem list --json
 ```
 
-### MCP 工具中的 Scope 参数
+### stats — 统计信息
 
-以下 MCP 工具均支持 `scope` 参数，可在调用时指定操作范围：
+```
+mem stats [options]
+```
 
-| 工具 | scope 参数 |
-|------|-----------|
-| `memory_store` | 指定记忆写入的 scope |
-| `memory_recall` | 限定搜索范围 |
-| `memory_stats` | 过滤统计信息 |
-| `memory_list` | 过滤列表结果 |
+| 参数 | 说明 |
+|------|------|
+| `-s, --scope <scope>` | scope 过滤 |
+| `--json` | JSON 输出 |
 
-> **注意**：agent 只能操作自身 scope 内的记忆。如需跨 scope 操作，请通过 `--scope` 启动独立服务实例。
+### delete — 删除记忆
+
+```
+mem delete <uuid>
+```
+
+### scope — Scope 管理
+
+```
+mem scope list
+mem scope delete <scope> [--dry-run] [--yes]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--dry-run` | 预览将删除的数量，不实际删除 |
+| `--yes` | 跳过确认，直接删除 |
+
+### config — 配置管理
+
+```
+mem config init [-f, --force]
+mem config show [--json]
+mem config path
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-f, --force` | 覆盖已有配置文件 |
+| `--json` | JSON 输出 |
+
+### doctor — 健康检查
+
+```
+mem doctor [--config <path>] [--mcp]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--mcp` | 测试 MCP 协议握手 |
 
 ---
 
@@ -413,27 +467,93 @@ node ./bin/mem.mjs stats --scope myapp
 
 ---
 
-## Available Tools
+## MCP Tool Reference
 
-| Tool | Description |
-|------|-------------|
-| `memory_recall` | 混合检索（向量 + BM25），语义召回 |
-| `memory_store` | 存储新记忆，自动分类 |
-| `memory_forget` | 通过 ID 删除记忆 |
-| `memory_update` | 更新已有记忆的文本/重要度 |
-| `memory_stats` | 使用统计和 scope 分布 |
+### 记忆管理
+
+#### memory_store — 存储记忆
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `text` | string | ✅ | 记忆内容 |
+| `category` | preference / fact / decision / entity / reflection / other | | 记忆分类 |
+| `importance` | number 0-1 | | 重要度（默认 0.7） |
+| `scope` | string | | 目标 scope（默认 agent scope） |
+
+#### memory_recall — 语义召回
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `query` | string | ✅ | 搜索关键词 |
+| `limit` | number | | 最大结果数（默认 5，最大 20） |
+| `scope` | string | | 限定 scope |
+| `category` | preference / fact / decision / entity / reflection / other | | 限定分类 |
+
+#### memory_list — 列表查看
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `limit` | number | | 最大条数（默认 10，最大 50） |
+| `offset` | number | | 分页偏移（默认 0） |
+| `scope` | string | | 限定 scope |
+| `category` | string | | 限定分类 |
+
+#### memory_forget — 删除记忆
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `memoryId` | string | 二选一 | 直接按 ID 删除 |
+| `query` | string | 二选一 | 搜索后选择删除 |
+
+#### memory_update — 更新记忆
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `query` | string | ✅ | 搜索匹配要更新的记忆 |
+| `text` | string | | 新文本内容 |
+| `importance` | number 0-1 | | 新重要度 |
+| `category` | preference / ... | | 新分类 |
+
+#### memory_stats — 统计信息
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:---:|------|
+| `scope` | string | | 限定 scope |
+
+### 治理与管理
+
+以下工具为高级治理功能，用于记忆的归档、提升、去重和调试：
+
+| 工具 | 说明 |
+|------|------|
 | `memory_debug` | 检索链路追踪和排名解释 |
-| `memory_list` | 列表查看，支持按 scope/分类/时间过滤 |
-| `memory_promote` | 提升为治理记忆（高优先级） |
+| `memory_promote` | 提升为治理记忆（高优先级，不会被衰减淘汰） |
 | `memory_archive` | 归档（保留但排除召回） |
 | `memory_compact` | 去重并压缩记忆 |
 | `memory_explain_rank` | 解释记忆排名的原因 |
-| `self_improvement_log` | 记录改进建议 |
-| `self_improvement_extract_skill` | 从记忆中提取可复用技能 |
-| `self_improvement_review` | 审阅待改进项 |
-| `_lifecycle_auto_recall` | 自动召回（prompt 构建前） |
-| `_lifecycle_auto_capture` | 自动捕获（agent 结束后） |
+
+### 自我改进
+
+| 工具 | 说明 |
+|------|------|
+| `self_improvement_log` | 记录改进建议或错误经验 |
+| `self_improvement_extract_skill` | 从记忆提取可复用的技能/规范 |
+| `self_improvement_review` | 审阅积压的待改进项 |
+
+### 生命周期（内部）
+
+以下工具由 MCP 服务生命周期自动触发，通常无需手动调用：
+
+| 工具 | 说明 |
+|------|------|
+| `_lifecycle_auto_recall` | 自动召回（prompt 构建前注入上下文） |
+| `_lifecycle_auto_capture` | 自动捕获（agent 结束后提取关键信息） |
 | `_lifecycle_session_end` | 会话清理和收尾 |
+
+### Scope 与 Category 参数
+
+`memory_store`、`memory_recall`、`memory_list`、`memory_stats` 均支持 `scope` 和 `category` 参数在调用时限制操作范围。
+当前 agent 只能操作自身 scope 内的记忆（权限模型见 [Multi-Project Isolation](#multi-project-isolation)）。
 
 ---
 
