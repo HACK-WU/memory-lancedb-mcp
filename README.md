@@ -304,11 +304,12 @@ mem store <text> [options]
 | 参数 | 说明 |
 |------|------|
 | `-c, --category <cat>` | 记忆分类：`preference` / `fact` / `decision` / `entity` / `other` |
+| `-t, --tags <tags>` | 自定义标签，逗号分隔（如 `profile,project,tech`） |
 | `-i, --importance <n>` | 重要度 0-1（默认 0.7） |
 | `-s, --scope <scope>` | 目标 scope |
 
 ```bash
-mem store "用户偏好使用 pnpm" -c preference -i 0.9
+mem store "用户偏好使用 pnpm" -c preference -t tech,tools -i 0.9
 mem store "项目基于 LanceDB 存储" -c fact --scope myapp
 ```
 
@@ -321,12 +322,14 @@ mem search <query> [options]
 | 参数 | 说明 |
 |------|------|
 | `-s, --scope <scope>` | 限定 scope |
+| `-t, --tags <tags>` | 标签过滤（逗号分隔） |
 | `-l, --limit <n>` | 最大结果数（默认 5） |
 | `--json` | JSON 输出 |
 
 ```bash
 mem search "包管理器偏好" -s myapp -l 10
-mem search "数据库选型" --json
+mem search "工程师" -t profile
+mem search "数据库" -t project --json
 ```
 
 ### list — 列表查看
@@ -339,12 +342,14 @@ mem list [options]
 |------|------|
 | `-s, --scope <scope>` | scope 过滤 |
 | `-c, --category <cat>` | category 过滤 |
+| `-t, --tags <tags>` | 标签过滤（逗号分隔） |
 | `-l, --limit <n>` | 最大条数（默认 10） |
 | `--offset <n>` | 分页偏移（默认 0） |
 | `--json` | JSON 输出 |
 
 ```bash
 mem list -s myapp -c preference -l 20
+mem list -t profile,tech
 mem list --json
 ```
 
@@ -477,6 +482,7 @@ node ./bin/mem.mjs stats --scope myapp
 |------|------|:---:|------|
 | `text` | string | ✅ | 记忆内容 |
 | `category` | preference / fact / decision / entity / reflection / other | | 记忆分类 |
+| `tags` | string | | 自定义标签，逗号分隔（自动嵌入 text 前缀） |
 | `importance` | number 0-1 | | 重要度（默认 0.7） |
 | `scope` | string | | 目标 scope（默认 agent scope） |
 
@@ -488,6 +494,7 @@ node ./bin/mem.mjs stats --scope myapp
 | `limit` | number | | 最大结果数（默认 5，最大 20） |
 | `scope` | string | | 限定 scope |
 | `category` | preference / fact / decision / entity / reflection / other | | 限定分类 |
+| `tags` | string | | 标签过滤（嵌入 query 前缀，BM25 命中） |
 
 #### memory_list — 列表查看
 
@@ -497,6 +504,7 @@ node ./bin/mem.mjs stats --scope myapp
 | `offset` | number | | 分页偏移（默认 0） |
 | `scope` | string | | 限定 scope |
 | `category` | string | | 限定分类 |
+| `tags` | string | | 标签过滤（逗号分隔） |
 
 #### memory_forget — 删除记忆
 
@@ -554,6 +562,30 @@ node ./bin/mem.mjs stats --scope myapp
 
 `memory_store`、`memory_recall`、`memory_list`、`memory_stats` 均支持 `scope` 和 `category` 参数在调用时限制操作范围。
 当前 agent 只能操作自身 scope 内的记忆（权限模型见 [Multi-Project Isolation](#multi-project-isolation)）。
+
+### Tags 标签
+
+突破 category 固有限制，支持自定义**多标签分类**（如 `profile`、`project`、`tech`）。
+
+**存储机制**：tags 以 `【标签:x,y】` 前缀嵌入 text 字段，不修改父项目的 TypeBox schema。
+
+```
+mem store "用户是全栈工程师" --tags profile,tech
+→ text = "【标签:profile,tech】 用户是全栈工程师"
+```
+
+**检索机制**：BM25 自然命中标签前缀，无需额外索引。结果展示时自动剥离前缀。
+
+```
+mem search "工程师" --tags profile    → 只返回含 profile 标签的记忆
+mem list --tags profile,tech          → 按标签过滤列表
+```
+
+**MCP 调用约定**：AI 助手直接传 `tags` 参数即可，wrapper 自动处理前缀嵌入。
+
+```json
+{ "text": "用户信息", "category": "other", "tags": "profile,tech" }
+```
 
 ---
 

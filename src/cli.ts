@@ -54,6 +54,13 @@ async function loadMemoryStore(): Promise<new (opts: { dbPath: string; vectorDim
   }
 }
 
+/** Build tag prefix string (same format as wrapper's assembleTags) */
+function tagPrefix(tags: string | undefined): string {
+  if (!tags || !tags.trim()) return "";
+  const normalized = tags.trim().replace(/，/g, ",").replace(/\s+/g, "");
+  return `【标签:${normalized}】`;
+}
+
 // ============================================================================
 // Secret Masking Utility
 // ============================================================================
@@ -171,6 +178,7 @@ program
   .option("-s, --scope <scope>", "Filter by scope")
   .option("-c, --category <cat>", "Filter by category")
   .option("-l, --limit <n>", "Max results", "10")
+  .option("-t, --tags <tags>", "Filter by tags (comma-separated)")
   .option("--offset <n>", "Pagination offset", "0")
   .option("--json", "JSON output")
   .option("--config <path>", "Config file path")
@@ -187,6 +195,23 @@ program
         console.error("❌ Invalid offset value.");
         process.exit(1);
       }
+
+      // If --tags is set, use recall with tag prefix for filtering
+      if (opts.tags) {
+        const prefix = tagPrefix(opts.tags);
+        const params: Record<string, unknown> = { query: prefix, limit, offset };
+        if (opts.scope) params.scope = opts.scope;
+        const result = await runtime.callTool("memory_recall", params);
+        if (opts.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          for (const item of result.content) {
+            console.log(item.text);
+          }
+        }
+        return;
+      }
+
       const params: Record<string, unknown> = { limit, offset };
       if (opts.scope) params.scope = opts.scope;
       if (opts.category) params.category = opts.category;
@@ -214,6 +239,7 @@ program
   .description("Search memories using hybrid retrieval")
   .option("-s, --scope <scope>", "Filter by scope")
   .option("-l, --limit <n>", "Max results", "5")
+  .option("-t, --tags <tags>", "Filter by tags (comma-separated)")
   .option("--json", "JSON output")
   .option("--config <path>", "Config file path")
   .action(async (query, opts) => {
@@ -229,6 +255,7 @@ program
         limit: searchLimit,
       };
       if (opts.scope) params.scope = opts.scope;
+      if (opts.tags) params.tags = opts.tags;
 
       const result = await runtime.callTool("memory_recall", params);
       if (opts.json) {
@@ -283,6 +310,7 @@ program
   .description("Store a memory")
   .option("-i, --importance <n>", "Importance 0-1", "0.7")
   .option("-c, --category <cat>", "Category (preference|fact|decision|entity|other)")
+  .option("-t, --tags <tags>", "Comma-separated tags (e.g. profile,project,tech)")
   .option("-s, --scope <scope>", "Target scope")
   .option("--config <path>", "Config file path")
   .action(async (text, opts) => {
@@ -298,6 +326,7 @@ program
         importance,
       };
       if (opts.category) params.category = opts.category;
+      if (opts.tags) params.tags = opts.tags;
       if (opts.scope) params.scope = opts.scope;
 
       const result = await runtime.callTool("memory_store", params);

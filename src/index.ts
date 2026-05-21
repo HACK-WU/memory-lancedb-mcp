@@ -15,6 +15,32 @@ import { createJiti } from "jiti";
 // Types
 // ============================================================================
 
+/** Tag markdown prefix format: 【标签:x,y】 text */
+const TAG_PREFIX_RE = /^【标签:(.+?)】\s*/;
+
+/** Assemble tag string into a text prefix. Returns empty string if no tags. */
+function assembleTags(tags: string | undefined): string {
+  if (!tags || !tags.trim()) return "";
+  const normalized = tags.trim().replace(/，/g, ",").replace(/\s+/g, "");
+  return `【标签:${normalized}】 `;
+}
+
+/** Strip tag prefix from text, returning the clean content. */
+function stripTags(text: string): string {
+  return text.replace(TAG_PREFIX_RE, "");
+}
+
+/** MCP tools that support tags injection. */
+const TAG_AWARE_TOOLS = new Set(["memory_store", "memory_recall", "memory_list"]);
+
+/** Tag parameter schema fragment for tool injection. */
+const TAGS_SCHEMA: Record<string, JsonSchema> = {
+  tags: {
+    type: "string",
+    description: "自定义标签，逗号分隔（如 profile,project,tech）。存储时嵌入文本前缀，检索时作为过滤条件。",
+  },
+};
+
 export interface MemoryRuntime {
   /** The fake API instance (for advanced usage) */
   api: FakeOpenClawApi;
@@ -160,20 +186,58 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
     config,
 
     async callTool(name: string, params: Record<string, unknown>, ctx?: ToolCallContext): Promise<ToolResult> {
-      // Inject agentId from scope for per-project isolation
+      // --- Tag preprocessing ---
+      const normalized: Record<string, unknown> = { ...params };
+      if (TAG_AWARE_TOOLS.has(name) && typeof normalized.tags === "string") {
+        const tags = normalized.tags as string;
+        const prefix = assembleTags(tags);
+        delete normalized.tags;
+        if (prefix) {
+          if (name === "memory_store") {
+            normalized.text = prefix + (normalized.text || "");
+          } else if (name === "memory_recall") {
+            normalized.query = prefix + (normalized.query || "");
+          }
+          // memory_list: tags stripped; no text field to prefix
+        }
+      }
+
+      // --- Scope injection ---
       const effectiveCtx = options.scope
         ? { ...ctx, agentId: options.scope }
         : ctx;
-      return api.callTool(name, params, effectiveCtx);
+
+      const result = await api.callTool(name, normalized, effectiveCtx);
+
+      // --- Tag postprocessing: strip tag prefixes from result text ---
+      if (TAG_AWARE_TOOLS.has(name) && result.content) {
+        for (const item of result.content) {
+          if (typeof item.text === "string") {
+            item.text = stripTags(item.text);
+          }
+        }
+      }
+
+      return result;
     },
 
     listTools(): ToolInfo[] {
       const defs = api.getAllToolDefinitions();
-      return defs.map((def) => ({
-        name: def.name,
-        description: def.description,
-        inputSchema: extractInputSchema(def.parameters),
-      }));
+      return defs.map((def) => {
+        const tool: ToolInfo = {
+          name: def.name,
+          description: def.description,
+          inputSchema: extractInputSchema(def.parameters),
+        };
+        // Inject tags parameter into tag-aware tools
+        if (TAG_AWARE_TOOLS.has(def.name) && tool.inputSchema?.properties) {
+          tool.inputSchema = {
+            ...tool.inputSchema,
+            properties: { ...tool.inputSchema.properties, ...TAGS_SCHEMA },
+          };
+        }
+        return tool;
+      });
     },
 
     async emitEvent(event: string, payload?: unknown, ctx?: unknown): Promise<unknown[]> {
