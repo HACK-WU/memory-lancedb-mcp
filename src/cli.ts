@@ -17,7 +17,7 @@
 import { Command } from "commander";
 import { startMcpServer } from "./mcp-server.js";
 import { startSseServer } from "./mcp-server-sse.js";
-import { createMemoryRuntime } from "./index.js";
+import { createMemoryRuntime, normalizeTags } from "./index.js";
 import { initConfig, getConfigPath, loadConfig, getDefaultConfigDir } from "./config.js";
 import YAML from "yaml";
 import { existsSync } from "node:fs";
@@ -54,10 +54,10 @@ async function loadMemoryStore(): Promise<new (opts: { dbPath: string; vectorDim
   }
 }
 
-/** Build tag prefix string (same format as wrapper's assembleTags) */
+/** Build tag prefix string (delegates normalization+validation to wrapper). */
 function tagPrefix(tags: string | undefined): string {
-  if (!tags || !tags.trim()) return "";
-  const normalized = tags.trim().replace(/，/g, ",").replace(/\s+/g, "");
+  const normalized = normalizeTags(tags);
+  if (!normalized) return "";
   return `【标签:${normalized}】`;
 }
 
@@ -199,8 +199,9 @@ program
       // If --tags is set, use recall with tag prefix for filtering
       if (opts.tags) {
         const prefix = tagPrefix(opts.tags);
-        const params: Record<string, unknown> = { query: prefix, limit, offset };
+        const params: Record<string, unknown> = { query: prefix, limit };
         if (opts.scope) params.scope = opts.scope;
+        if (opts.category) params.category = opts.category;
         const result = await runtime.callTool("memory_recall", params);
         if (opts.json) {
           console.log(JSON.stringify(result, null, 2));

@@ -18,10 +18,43 @@ import { createJiti } from "jiti";
 /** Tag markdown prefix format: 【标签:x,y】 text */
 const TAG_PREFIX_RE = /^【标签:(.+?)】\s*/;
 
-/** Assemble tag string into a text prefix. Returns empty string if no tags. */
-function assembleTags(tags: string | undefined): string {
+/**
+ * Allowed characters in normalized tags:
+ *   - ASCII letters / digits / `_` / `-` (\w covers a-zA-Z0-9_)
+ *   - colon `:` and slash `/` (common in scoped tags like ns:foo)
+ *   - dot `.` (e.g. semver-like tags)
+ *   - CJK unified ideographs (\u4e00-\u9fff)
+ *   - comma `,` (the tag separator itself)
+ * Notably forbidden: 【 】 (would break the prefix grammar), whitespace,
+ * control characters, emoji, and any other punctuation.
+ */
+const TAG_CHAR_WHITELIST = /^[\w\-:/.\u4e00-\u9fff,]+$/u;
+
+/**
+ * Normalize and validate a raw tags string.
+ * - Trim outer whitespace
+ * - Convert full-width comma to half-width
+ * - Strip all internal whitespace
+ * - Reject any character outside the whitelist (throws Error)
+ * Returns empty string when input is empty / whitespace-only.
+ */
+export function normalizeTags(tags: string | undefined): string {
   if (!tags || !tags.trim()) return "";
   const normalized = tags.trim().replace(/，/g, ",").replace(/\s+/g, "");
+  if (!TAG_CHAR_WHITELIST.test(normalized)) {
+    throw new Error(
+      `Invalid tag value: ${JSON.stringify(tags)}. ` +
+      `Tags may only contain letters, digits, '_', '-', ':', '/', '.', CJK characters, ` +
+      `and ',' as separator. Reserved characters '【' and '】' are not allowed.`
+    );
+  }
+  return normalized;
+}
+
+/** Assemble tag string into a text prefix. Returns empty string if no tags. */
+function assembleTags(tags: string | undefined): string {
+  const normalized = normalizeTags(tags);
+  if (!normalized) return "";
   return `【标签:${normalized}】 `;
 }
 
@@ -187,18 +220,26 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
 
     async callTool(name: string, params: Record<string, unknown>, ctx?: ToolCallContext): Promise<ToolResult> {
       // --- Tag preprocessing ---
+      // effectiveName may differ from name when memory_list+tags is rewritten to memory_recall.
+      let effectiveName = name;
       const normalized: Record<string, unknown> = { ...params };
-      if (TAG_AWARE_TOOLS.has(name) && typeof normalized.tags === "string") {
+      if (TAG_AWARE_TOOLS.has(effectiveName) && typeof normalized.tags === "string") {
         const tags = normalized.tags as string;
         const prefix = assembleTags(tags);
         delete normalized.tags;
         if (prefix) {
-          if (name === "memory_store") {
+          if (effectiveName === "memory_store") {
             normalized.text = prefix + (normalized.text || "");
-          } else if (name === "memory_recall") {
+          } else if (effectiveName === "memory_recall") {
             normalized.query = prefix + (normalized.query || "");
+          } else if (effectiveName === "memory_list") {
+            // Rewrite list+tags to recall(query=prefix) so that tag filtering
+            // actually takes effect (BM25 hits the embedded prefix).
+            // Preserve scope/category/limit; drop offset (recall doesn't support it).
+            effectiveName = "memory_recall";
+            normalized.query = prefix;
+            delete normalized.offset;
           }
-          // memory_list: tags stripped; no text field to prefix
         }
       }
 
@@ -207,9 +248,10 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
         ? { ...ctx, agentId: options.scope }
         : ctx;
 
-      const result = await api.callTool(name, normalized, effectiveCtx);
+      const result = await api.callTool(effectiveName, normalized, effectiveCtx);
 
       // --- Tag postprocessing: strip tag prefixes from result text ---
+      // Use original `name` so that even rewritten memory_list calls have prefixes stripped.
       if (TAG_AWARE_TOOLS.has(name) && result.content) {
         for (const item of result.content) {
           if (typeof item.text === "string") {

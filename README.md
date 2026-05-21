@@ -587,6 +587,16 @@ mem list --tags profile,tech          → 按标签过滤列表
 { "text": "用户信息", "category": "other", "tags": "profile,tech" }
 ```
 
+**标签命名约束**：标签内容仅允许下列字符：
+
+- 字母、数字
+- `_`、`-`、`:`、`/`、`.`
+- CJK 中文字符（`\u4e00-\u9fff`）
+- `,` 作为分隔符
+
+保留字符 `【` 和 `】` 是前缀语法的边界标记，**禁止用于标签名**；空格、emoji、其他标点也会被拒绝。
+传入非法字符时 wrapper / CLI 会直接抛出 `Invalid tag value: ...` 错误，不会静默落库，避免破坏前缀结构造成检索/剥离异常。
+
 ---
 
 ## Configuration Reference
