@@ -317,18 +317,38 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
       }
 
       // --- Scope injection ---
-      // When a server-level scope is active, all calls are isolated to that scope.
+      // When a server-level scope is active (--scope X), force ALL operations into that scope:
+      //   - Override normalized.scope to X regardless of what the caller passed.
+      //   - Use agentId="system" (bypass) so isAccessible() returns true for scope X.
+      //     Using agentId=X would fail because X's ACL only contains ["global", "agent:X"],
+      //     not "X" itself.
+      //
       // When no scope is set (cross-scope mode, agentId="system"):
       //   - memory_store without explicit scope → auto-inject default scope (e.g. "global")
       //     so the write doesn't land in "agent:system" (the bypass agentId's private scope).
-      //     Keep agentId="system" so isAccessible() bypasses ACL checks on the default scope.
       //   - memory_store/update/forget WITH explicit scope → keep agentId="system" because
-      //     isSystemBypassId("system")=true makes isAccessible() return true for any valid scope,
-      //     while agentId=undefined gets resolved to "main" by the plugin, which lacks ACL access.
+      //     isSystemBypassId("system")=true makes isAccessible() return true for any valid scope.
       let effectiveCtx: ToolCallContext;
       const baseCtx: ToolCallContext = ctx ?? {};
       if (options.scope) {
-        effectiveCtx = { ...baseCtx, agentId: options.scope };
+        // Server-level scope is active (--scope X).
+        // If the caller explicitly specifies a scope that differs from X, reject the request.
+        const callerScope = typeof normalized.scope === "string" && normalized.scope.trim().length > 0
+          ? normalized.scope.trim()
+          : null;
+        if (callerScope !== null && callerScope !== options.scope) {
+          return {
+            content: [{
+              type: "text",
+              text: `Scope mismatch: this server is locked to scope "${options.scope}", ` +
+                `but the request targets scope "${callerScope}". ` +
+                `Operations on other scopes are not allowed.`,
+            }],
+          };
+        }
+        normalized.scope = options.scope;
+        // Use "system" bypass so ACL checks pass for the target scope
+        effectiveCtx = { ...baseCtx, agentId: "system" };
       } else {
         const isWriteOp = name === "memory_store" || name === "memory_update" || name === "memory_forget";
         if (isWriteOp && name === "memory_store") {
