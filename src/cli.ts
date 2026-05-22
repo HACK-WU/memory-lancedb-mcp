@@ -199,7 +199,7 @@ program
       // If --tags is set, use recall with tag prefix for filtering
       if (opts.tags) {
         const prefix = tagPrefix(opts.tags);
-        const params: Record<string, unknown> = { query: prefix, limit };
+        const params: Record<string, unknown> = { query: prefix, limit, tags: opts.tags };
         if (opts.scope) params.scope = opts.scope;
         if (opts.category) params.category = opts.category;
         const result = await runtime.callTool("memory_recall", params, { agentId: "system" });

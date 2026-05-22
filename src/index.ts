@@ -63,6 +63,24 @@ function stripTags(text: string): string {
   return text.replace(TAG_PREFIX_RE, "");
 }
 
+/**
+ * Check whether a recall result entry (array of lines) contains a tag prefix
+ * that matches ALL of the requested tag tokens. Supports subset matching:
+ * if the entry has tags ["scope测试", "global"] and the request is ["scope测试"],
+ * it still matches because the entry contains the requested tag.
+ */
+function entryMatchesTags(entryLines: string[], requestedTokens: string[]): boolean {
+  const TAG_RE = /【标签:([^】]+)】/;
+  for (const line of entryLines) {
+    const m = line.match(TAG_RE);
+    if (!m) continue;
+    const entryTokens = m[1].split(",").map((t) => t.trim());
+    // All requested tokens must be present in the entry's tags.
+    return requestedTokens.every((rt) => entryTokens.includes(rt));
+  }
+  return false;
+}
+
 /** MCP tools that support tags injection. */
 const TAG_AWARE_TOOLS = new Set(["memory_store", "memory_recall", "memory_list"]);
 
@@ -368,9 +386,62 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
 
       const result = await api.callTool(effectiveName, normalized, effectiveCtx);
 
-      // --- Tag postprocessing: strip tag prefixes from result text ---
-      // Use original `name` so that even rewritten memory_list calls have prefixes stripped.
+      // --- Tag postprocessing ---
       if (TAG_AWARE_TOOLS.has(name) && result.content) {
+        // Hard-filter: if caller specified tags, only keep result lines whose raw text
+        // contains the tag prefix (before stripping). This compensates for the
+        // soft-filter nature of BM25 weighting which can return non-matching memories.
+        //
+        // The plugin returns a single content item with all results as a formatted
+        // text block (e.g. "Found N memories:\n\n1. [id] [cat] 【标签:...】 text\n2. ...").
+        // We split by lines, keep only entries matching the tag prefix, and adjust the
+        // header count accordingly.
+        const requestedTags = typeof params.tags === "string" ? normalizeTags(params.tags as string) : "";
+        if (requestedTags && name !== "memory_store") {
+          // Extract individual tag tokens from the requested tags string.
+          // "scope测试,global" → ["scope测试", "global"]
+          const requestedTokens = requestedTags.split(",").map((t) => t.trim()).filter(Boolean);
+          for (const item of result.content) {
+            if (typeof item.text !== "string") continue;
+            const lines = item.text.split("\n");
+            const headerIdx = lines.findIndex((l) => /^\s*Found\s+\d+\s+memories?:/i.test(l));
+            const kept: string[] = [];
+            let currentEntry: string[] = [];
+            let inEntry = false;
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i];
+              // Detect numbered entry start: "1. [uuid] ..."
+              if (/^\s*\d+\.\s+\[/.test(line)) {
+                // Flush previous entry
+                if (inEntry && entryMatchesTags(currentEntry, requestedTokens)) {
+                  kept.push(...currentEntry);
+                }
+                currentEntry = [line];
+                inEntry = true;
+              } else if (inEntry) {
+                currentEntry.push(line);
+              } else {
+                // Header or blank lines before entries
+                if (headerIdx >= 0 && i <= headerIdx) continue; // skip old header
+                kept.push(line);
+              }
+            }
+            // Flush last entry
+            if (inEntry && entryMatchesTags(currentEntry, requestedTokens)) {
+              kept.push(...currentEntry);
+            }
+            // Rebuild header
+            const entryCount = kept.filter((l) => /^\s*\d+\.\s+\[/.test(l)).length;
+            const prefix = entryCount === 1 ? "Found 1 memory:" : `Found ${entryCount} memories:`;
+            item.text = [prefix, "", ...kept.filter((l) => !/^\s*Found\s+\d+\s+memories?:/i.test(l))]
+              .join("\n")
+              .replace(/\n{3,}/g, "\n\n")
+              .trim();
+          }
+        }
+
+        // Strip tag prefixes from result text.
+        // Use original `name` so that even rewritten memory_list calls have prefixes stripped.
         for (const item of result.content) {
           if (typeof item.text === "string") {
             item.text = stripTags(item.text);
