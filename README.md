@@ -188,6 +188,20 @@ npm rebuild @lancedb/lancedb
 }
 ```
 
+启用项目隔离（`--scope` 和值必须分开写）：
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "node",
+      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve", "--scope", "project:myapp"],
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
 重启 Claude Desktop 后，在对话中即可使用记忆工具：
 - 说 "请帮我记住这个项目的架构" → 触发 `memory_store`
 - 说 "关于包管理器，我之前有什么偏好？" → 触发 `memory_recall`
@@ -411,56 +425,88 @@ mem doctor [--config <path>] [--mcp]
 
 ## Multi-Project Isolation
 
-通过 `--scope` 参数实现不同项目之间的记忆完全隔离：
+通过 `--scope` 参数实现不同项目之间的记忆完全隔离。支持两种运行模式：
+
+### 运行模式
+
+| 模式 | 启动方式 | 行为 |
+|------|----------|------|
+| **跨 scope 模式** | `mem serve`（不指定 `--scope`） | 可读写任意 scope；`memory_store` 不指定 scope 时自动写入 `global` |
+| **锁定 scope 模式** | `mem serve --scope X` | 所有操作强制锁定在 scope X 内；请求其他 scope 会被拒绝 |
+
+### 跨 scope 模式（默认）
+
+不指定 `--scope` 时，服务以跨 scope 模式运行：
+
+- `memory_store` 不指定 scope → 自动写入 `global`（避免写入 `agent:system` 私有空间）
+- `memory_store` 指定 `scope: "project:alpha"` → 写入 `project:alpha`
+- `memory_recall` 不指定 scope → 跨 scope 返回相关记忆
+- `memory_recall` 指定 scope → 只返回该 scope 的记忆
+
+```bash
+mem serve                          # 跨 scope 模式
+mem store "通用知识"               # → 写入 global
+mem store "项目A信息" --scope project:alpha  # → 写入 project:alpha
+mem search "架构设计"              # → 跨 scope 搜索
+mem search "架构设计" --scope project:alpha  # → 仅搜索 project:alpha
+```
+
+### 锁定 scope 模式
+
+指定 `--scope X` 时，服务以锁定模式运行，**所有操作强制限定在 scope X 内**：
+
+- `memory_store` 不指定 scope → 写入 scope X
+- `memory_store` 指定 `scope: "X"`（与服务端一致）→ 允许，写入 scope X
+- `memory_store` 指定 `scope: "Y"`（与服务端不一致）→ **拒绝**，返回 scope 不匹配错误
+- `memory_recall` → 只返回 scope X 的记忆，不会泄漏其他 scope
+
+```bash
+mem serve --scope project:alpha    # 锁定到 project:alpha
+mem store "项目A信息"              # → 写入 project:alpha
+mem store "项目A信息" --scope project:alpha  # → 允许，写入 project:alpha
+mem store "其他信息" --scope global # → 拒绝：Scope mismatch
+mem search "架构"                  # → 仅返回 project:alpha 的记忆
+```
 
 ### 工作原理
 
-memory-lancedb-pro 基于 **agent scope** 进行隔离。每个 `--scope` 值会被映射为一个独立的 agent ID，所有存储和检索操作自动限定在该 scope 内。
+memory-lancedb-pro 基于 **scope ACL** 进行隔离。锁定模式下，wrapper 使用 `agentId="system"`（系统级绕过 ID）通过 ACL 检查，同时在 wrapper 层强制将 `normalized.scope` 设为服务端 scope 值，确保：
 
-```
-项目 A: mem serve --scope myapp      → scope agent:myapp
-项目 B: mem serve --scope backend     → scope agent:backend
-项目 C: mem serve --scope docs-site   → scope agent:docs-site
-```
-
-三条记忆互不交叉，`memory_recall`、`memory_list`、`memory_stats` 均只返回各自项目的记忆。
-
-### 权限模型
-
-| 启动方式 | 可操作的 Scope |
-|----------|---------------|
-| 未指定 `--scope`（默认 agent:main） | 仅 `agent:main`、`global` |
-| `--scope myapp` | 仅 `agent:myapp`、`global` |
-| `--scope backend` | 仅 `agent:backend`、`global` |
-
-`memory_store` 指定 `scope:"agent:test-project"` 时会被拒绝，除非服务以 `--scope test-project` 启动。这是安全特性，防止项目间的记忆交叉污染。
+1. ACL 检查通过（`isSystemBypassId("system")` 使 `isAccessible()` 返回 true）
+2. 实际写入的 scope 始终是服务端指定的值
+3. 不一致的 scope 请求在进入插件前即被拒绝
 
 ### 使用示例
 
 ```bash
-# 启动项目 A 的 MCP Server（stdio 模式）
-node ./bin/mem.mjs serve --scope myapp
-# 所有 memory_store / memory_recall 操作自动限定在 myapp
+# 跨 scope 模式（stdio）
+mem serve
 
-# 启动项目 B 的 SSE 服务
-node ./bin/mem.mjs serve --sse --port 3101 --scope backend
+# 锁定 scope 模式（stdio）
+mem serve --scope project:myapp
+
+# 锁定 scope + SSE 远程模式
+mem serve --sse --port 3100 --scope project:myapp
 
 # CLI 查看特定项目的记忆
-node ./bin/mem.mjs list --scope myapp --limit 10
-node ./bin/mem.mjs search "TypeScript" --scope myapp
-node ./bin/mem.mjs stats --scope myapp
+mem list --scope project:myapp --limit 10
+mem search "TypeScript" --scope project:myapp
+mem stats --scope project:myapp
+
+# 删除整个 scope 的所有记忆
+mem scope delete project:myapp --yes
 ```
 
 ### MCP 客户端配置（多项目）
 
-在 MCP 客户端配置中为不同项目指定不同的 scope：
+> **注意**：`--scope` 和值必须作为 `args` 数组中的**两个独立元素**，不能写成 `"--scope myapp"` 一个字符串。
 
 ```json
 {
   "mcpServers": {
     "memory-app-a": {
       "command": "node",
-      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve", "--scope", "myapp"],
+      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve", "--scope", "project:myapp"],
       "env": { "OPENAI_API_KEY": "sk-..." }
     },
     "memory-app-b": {
@@ -470,6 +516,31 @@ node ./bin/mem.mjs stats --scope myapp
     }
   }
 }
+```
+
+SSE 远程模式配置：
+
+```json
+{
+  "mcpServers": {
+    "memory-remote": {
+      "url": "http://remote-host:3100/sse"
+    }
+  }
+}
+```
+
+### Scope 管理
+
+```bash
+# 列出所有 scope 及记忆数量
+mem scope list
+
+# 预览删除范围（不实际删除）
+mem scope delete project:old --dry-run
+
+# 确认删除整个 scope（会永久删除该 scope 内所有记忆数据）
+mem scope delete project:old --yes
 ```
 
 ---

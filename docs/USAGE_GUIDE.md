@@ -13,6 +13,14 @@
 5. [记忆召回最佳实践](#5-记忆召回最佳实践)
 6. [标签（Tags）系统详解](#6-标签tags系统详解)
 7. [Scope 多项目隔离](#7-scope-多项目隔离)
+   - [两种运行模式](#71-两种运行模式)
+   - [跨 scope 模式](#72-跨-scope-模式默认)
+   - [锁定 scope 模式](#73-锁定-scope-模式)
+   - [隔离原理](#74-隔离原理)
+   - [SSE 远程模式 + scope](#75-sse-远程模式--scope)
+   - [MCP 客户端配置](#76-mcp-客户端配置多项目)
+   - [Scope 管理](#77-scope-管理)
+   - [与其他过滤的组合](#78-与其他过滤的组合)
 8. [注意事项与常见问题](#8-注意事项与常见问题)
 9. [故障排除](#9-故障排除)
 
@@ -414,26 +422,138 @@ MCP 调用示例：
 
 ## 7. Scope 多项目隔离
 
-### 7.1 启用方式
+### 7.1 两种运行模式
+
+| 模式 | 启动方式 | 行为 |
+|------|----------|------|
+| **跨 scope 模式** | `mem serve`（不指定 `--scope`） | 可读写任意 scope；`memory_store` 不指定 scope 时自动写入 `global` |
+| **锁定 scope 模式** | `mem serve --scope X` | 所有操作强制锁定在 scope X 内；请求其他 scope 会被拒绝 |
+
+### 7.2 跨 scope 模式（默认）
+
+不指定 `--scope` 时，服务以跨 scope 模式运行，可自由操作所有 scope：
 
 ```bash
-# CLI 方式
-mem serve --scope project:myapp
-mem store "xxx" --scope project:myapp
+mem serve                          # 跨 scope 模式
 
-# MCP 方式：由 wrapper 启动时配置
+# 写入
+mem store "通用知识"               # → 自动写入 global
+mem store "项目A信息" --scope project:alpha  # → 写入 project:alpha
+
+# 召回
+mem search "架构设计"              # → 跨 scope 搜索
+mem search "架构设计" --scope project:alpha  # → 仅搜索 project:alpha
 ```
 
-### 7.2 隔离原理
+MCP 工具行为：
 
-不同 scope 的记忆存在完全独立的 agent 命名空间下，互不可见。`mem scope list` 可查看所有 scope 及其记忆数。
+| 操作 | 不指定 scope | 指定 scope |
+|------|-------------|------------|
+| `memory_store` | 自动写入 `global` | 写入指定 scope |
+| `memory_recall` | 跨 scope 返回结果 | 只返回该 scope 记忆 |
+| `memory_list` | 跨 scope 列出 | 只列出该 scope 记忆 |
+| `memory_stats` | 返回全局统计 | 返回该 scope 统计 |
+
+### 7.3 锁定 scope 模式
+
+指定 `--scope X` 时，服务以锁定模式运行，**所有操作强制限定在 scope X 内**：
+
+```bash
+mem serve --scope project:alpha    # 锁定到 project:alpha
+
+# ✅ 允许的操作
+mem store "项目A信息"              # → 写入 project:alpha
+mem store "项目A信息" --scope project:alpha  # → 允许，写入 project:alpha
+mem search "架构"                  # → 仅返回 project:alpha 的记忆
+
+# ❌ 被拒绝的操作
+mem store "其他信息" --scope global # → 拒绝：Scope mismatch
+mem store "其他信息" --scope project:beta  # → 拒绝：Scope mismatch
+```
+
+MCP 工具行为（`--scope project:alpha` 模式下）：
+
+| 操作 | 不指定 scope | 指定 scope=project:alpha | 指定其他 scope |
+|------|-------------|-------------------------|---------------|
+| `memory_store` | 写入 `project:alpha` | ✅ 允许，写入 `project:alpha` | ❌ 拒绝 |
+| `memory_recall` | 只返回 `project:alpha` | 只返回 `project:alpha` | ❌ 拒绝 |
+| `memory_forget` | 删除 `project:alpha` 的记忆 | 删除 `project:alpha` 的记忆 | ❌ 拒绝 |
+
+拒绝时的返回信息：
 
 ```
-scope=project:A → agent:project:A  → 只能看到 project:A 的记忆
-scope=project:B → agent:project:B  → 只能看到 project:B 的记忆
+Scope mismatch: this server is locked to scope "project:alpha",
+but the request targets scope "global". Operations on other scopes are not allowed.
 ```
 
-### 7.3 与其他过滤的组合
+### 7.4 隔离原理
+
+memory-lancedb-pro 基于 **scope ACL** 进行隔离。锁定模式下，wrapper 使用 `agentId="system"`（系统级绕过 ID）通过 ACL 检查，同时在 wrapper 层：
+
+1. **强制 scope**：将 `normalized.scope` 设为服务端 `--scope` 值，确保实际写入的 scope 始终正确
+2. **拒绝不一致**：调用者指定的 scope 与服务端 scope 不一致时，在进入插件前即被拒绝
+3. **ACL 绕过**：`isSystemBypassId("system")` 使 `isAccessible()` 对任何有效 scope 返回 true
+
+跨 scope 模式下，`memory_store` 不指定 scope 时自动注入 `global`，避免写入 `agent:system` 私有空间。
+
+### 7.5 SSE 远程模式 + scope
+
+SSE 模式同样支持 `--scope` 参数：
+
+```bash
+# 启动 SSE 服务并锁定 scope
+mem serve --sse --port 3100 --scope project:myapp
+```
+
+客户端配置（SSE URL 方式）：
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "url": "http://localhost:3100/sse"
+    }
+  }
+}
+```
+
+### 7.6 MCP 客户端配置（多项目）
+
+> **重要**：`--scope` 和值必须作为 `args` 数组中的**两个独立元素**，不能写成 `"--scope myapp"` 一个字符串，否则会报 `unknown option '--scope myapp'` 错误。
+
+```json
+{
+  "mcpServers": {
+    "memory-app-a": {
+      "command": "node",
+      "args": ["/path/to/bin/mem.mjs", "serve", "--scope", "project:myapp"],
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    },
+    "memory-app-b": {
+      "command": "node",
+      "args": ["/path/to/bin/mem.mjs", "serve", "--scope", "backend"],
+      "env": { "OPENAI_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
+### 7.7 Scope 管理
+
+```bash
+# 列出所有 scope 及记忆数量
+mem scope list
+
+# 预览删除范围（不实际删除）
+mem scope delete project:old --dry-run
+
+# 确认删除整个 scope（会永久删除该 scope 内所有记忆数据）
+mem scope delete project:old --yes
+```
+
+> **注意**：`scope delete` 会**永久删除**该 scope 内的所有记忆数据，不可恢复。建议先用 `--dry-run` 确认范围。
+
+### 7.8 与其他过滤的组合
 
 ```bash
 # 查询某项目下的安全相关记忆
@@ -532,10 +652,17 @@ mem doctor
 
 ### 9.4 Scope 权限拒绝
 
-如果返回 `Access denied to scope: xxx`：
-- 确认启动 MCP 服务时使用了 `--scope` 参数
-- 确认请求的 scope 在允许访问列表内
+如果返回 `Scope mismatch: this server is locked to scope "X", but the request targets scope "Y"`：
+
+- 确认 MCP 服务启动时使用的 `--scope` 参数值
+- 请求的 scope 必须与服务端 `--scope` 一致，否则会被拒绝
+- 如果需要跨 scope 操作，请移除 `--scope` 参数以使用跨 scope 模式
+
+如果返回 `Access denied to scope: xxx`（来自插件层）：
+
+- 确认请求的 scope 在当前 agentId 的 ACL 中
 - 使用 `mem scope list` 查看可用 scope
+- 跨 scope 模式下，`memory_store` 不指定 scope 会自动写入 `global`
 
 ---
 
