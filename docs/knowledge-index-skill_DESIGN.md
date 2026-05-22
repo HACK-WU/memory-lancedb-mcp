@@ -19,6 +19,7 @@
 - 目标 4：按 scope 隔离项目数据，MCP 启动参数 `--scope` 全链路传递至脚本和本地存储
 - 目标 5：知识缺失时 AI 主动暂停并引导用户补充，通过定向扫描→总结→双写完成知识闭环
 - 目标 6：支持将项目已有的文件系统形式知识库快速导入，无需从零构建本地 KB
+- 目标 7：外部知识库通过预扫描生成摘要并摘要向量化，使导入知识对语义检索可见（摘要做发现、原文做交付）
 
 ### 1.3 明确不在范围内
 
@@ -27,6 +28,9 @@
 - 不涉及 scope 机制本身的实现（复用已有 `--scope` 参数）
 - 不涉及 Group 索引的自动生成（由开发者通过管理脚本手动创建，或通过 import-kb.ts 从外部知识库导入）
 - 不涉及 UI/可视化界面
+- 不涉及原文内容向量化（外部知识库仅摘要向量化，原文只存本地 KB）
+- 不涉及增量扫描 / fileHash 变更检测（初期每次全量扫描）
+- 不涉及扫描索引文件的自动过期清理
 
 ---
 
@@ -47,6 +51,11 @@
 | **导入根节点** | 外部知识库导入时自动创建的专属根节点，用于区分自建知识和导入知识，避免混合 | 不是默认的"项目根"节点，命名由 `--root-name` 指定（如"wiki"） |
 | **代码定位符** | 模块信息中附带的代码路径引用，格式为相对路径 + 可选的类名/方法名，帮助 AI 快速定位源码 | 不是完整的代码内容，是路径级别的精确定位 |
 | **批量向量化** | 将外部知识库内容批量写入记忆系统（向量存储）的过程，由独立脚本完成 | 不是本地 KB 写入，是向记忆系统的批量灌入 |
+| **预扫描** | 外部知识库导入前，由 AI Agent 扫描目录结构+文件标题（必要时读取内容头部），为每篇文档生成总结性摘要和关键词的过程 | 不是全文扫描，是轻量级元数据提取+摘要生成 |
+| **摘要** | 预扫描为每篇文档生成的 3~5 句总结性描述，涵盖核心职责、关键流程、涉及模块，用于语义检索的发现层 | 不是标题复述，是结构化总结；不包含完整原文 |
+| **扫描索引文件** | 预扫描产出的 JSON 文件（scan-index.json），记录每篇文档的路径、摘要、关键词、向量化状态，同时作为"已扫描"的状态追踪 | 不是 Group 索引，是预扫描的专属产出物 |
+| **发现层** | 双层架构的上层：摘要向量化后存入记忆系统，AI 通过语义检索摘要发现知识所在路径 | 不返回原文，只返回路径+摘要摘要 |
+| **交付层** | 双层架构的下层：原文存入本地 KB，AI 通过路径精确读取完整文档内容 | 不做语义检索，只做精确路径读取 |
 
 ---
 
@@ -78,7 +87,7 @@ memory-lancedb-pro 已具备：
 
 ### 4.1 方案概述
 
-在 memory-lancedb-pro 上层构建「Group 树索引 → Relations 缓存 → 本地 KB」三层文件系统。AI 通过一次 Group 索引查询获得项目知识全景；热门 Relation 直接走本地 JSON（TS 脚本），冷门 Relation 退化为关键词词云，AI 自行组装后走记忆系统语义检索。所有路径贯穿 scope 命名空间。
+在 memory-lancedb-pro 上层构建「Group 树索引 → Relations 缓存 → 本地 KB」三层文件系统。AI 通过一次 Group 索引查询获得项目知识全景；热门 Relation 直接走本地 JSON（TS 脚本），冷门 Relation 退化为关键词词云，AI 自行组装后走记忆系统语义检索。外部知识库导入采用「摘要做发现、原文做交付」双层架构：预扫描生成摘要+关键词 → 摘要向量化存入记忆系统 → 原文导入本地 KB。所有路径贯穿 scope 命名空间。
 
 ### 4.2 关键决策点
 
@@ -93,7 +102,9 @@ memory-lancedb-pro 已具备：
 | Scope 传递 | 全链路显式 `--scope` 参数 | 与 MCP 启动参数一致，无需额外配置 | 环境变量：隐式传递易出错 |
 | 记忆系统写入 | 仅通过 MCP `memory_store` 写入 | 记忆系统为权威数据源，本地 KB 是只读缓存副本 | 本地 KB 直接写入：导致双写一致性问题 |
 | 关键词规则 | 禁止代码符号，仅自然语言 | 代码路径/类名/方法名会引入噪音，降低语义检索精度 | 允许代码符号：检索时路径信息干扰向量匹配 |
-| 导入知识关键词 | 不生成 | 导入知识不在向量库中，关键词无检索价值 | 生成关键词：浪费存储且无实际用途 |
+| 导入知识关键词 | 由预扫描统一生成 | 预扫描时已生成摘要+关键词，导入时直接复用，避免重复生成 | 导入时不生成：语义检索完全不可见；导入后再生成：额外成本 |
+| 导入知识向量化 | 仅摘要向量化 | 摘要语义密度高、匹配质量好、成本极低；原文中代码/配置会稀释语义信号 | 原文向量化：成本高且语义噪音大；不向量化：导入知识对语义检索不可见 |
+| 预扫描渐进式读取 | AI Agent 自主判断 | AI 理解语义，可动态决定是否需要读取内容头部补充信息，比固定阈值更灵活 | 固定阈值（文件名长度）：不够智能；全部读取：不必要的 I/O 开销 |
 | 导入根节点 | 独立根节点隔离 | 避免自建知识与导入知识混合，Group 路径天然隔离 | 共享根节点：两类知识混在一起，难以区分来源 |
 
 ### 4.3 方案对比
@@ -110,6 +121,7 @@ memory-lancedb-pro 已具备：
 | scope 仅在记忆系统内部生效 | scope 贯穿索引、缓存、本地 KB 全链路 |
 | 知识缺失时 AI 无感知，反复空查 | 知识缺失时 AI 主动暂停，引导用户补充后扫描总结并双写 |
 | 项目已有文档无法复用，需从零构建 | 支持外部知识库导入，通过映射规则快速复用已有文档资产 |
+| 导入知识对语义检索不可见（仅精确路径命中） | 预扫描生成摘要+关键词，摘要向量化后语义检索可发现，命中路径后再读原文 |
 
 ---
 
@@ -150,7 +162,11 @@ flowchart TD
 
     IMPORT[import-kb.ts<br/>外部知识库导入]
     EXT[外部 docs/ 目录<br/>已有的 Markdown 文件]
-    EXT --> IMPORT
+    PRESCAN[scan-kb.ts<br/>预扫描：生成摘要+关键词]
+    SCANIDX[scan-index.json<br/>摘要向量化 → 记忆系统]
+    EXT --> PRESCAN
+    PRESCAN --> SCANIDX
+    SCANIDX --> IMPORT
     IMPORT --> G
     IMPORT --> R
     IMPORT --> KB
@@ -164,6 +180,8 @@ flowchart TD
     style DUAL fill:#C0B3D4,stroke:#9585AD
     style IMPORT fill:#A8D5BA,stroke:#6BAF8A
     style EXT fill:#A8D5BA,stroke:#6BAF8A
+    style PRESCAN fill:#A8D5BA,stroke:#6BAF8A
+    style SCANIDX fill:#A8D5BA,stroke:#6BAF8A
 ```
 
 ### 5.2 Scope 隔离层次
@@ -176,6 +194,26 @@ flowchart LR
     RC --> MS[MCP memory_recall<br/>scope 参数传递]
     KB_PATH --> TS_SCRIPT[TS 脚本<br/>--scope project-a]
 ```
+
+### 5.3 外部知识库双层架构（发现层 + 交付层）
+
+```mermaid
+flowchart TD
+    EXT[外部 docs/ 目录] --> PRESCAN[scan-kb.ts<br/>预扫描：读目录+标题+内容头部]
+    PRESCAN --> SUMMARY[每文档生成<br/>摘要 3~5句 + 关键词]
+    SUMMARY --> SCANIDX[scan-index.json<br/>路径+摘要+关键词+状态]
+    SCANIDX --> VEC[摘要向量化<br/>memory_store 批量写入]
+    SCANIDX --> IMPORT[import-kb.ts<br/>原文导入本地 KB<br/>关键词复用扫描结果]
+    VEC --> DISCOVER[发现层：记忆系统<br/>AI 语义检索摘要<br/>返回文档路径]
+    IMPORT --> DELIVER[交付层：本地 KB<br/>AI 按路径精确读取<br/>返回完整原文]
+    DISCOVER --> DELIVER
+```
+
+**架构要点**：
+- **发现层**（摘要 → 记忆系统）：摘要语义密度高，向量化成本低，匹配质量优于原文
+- **交付层**（原文 → 本地 KB）：完整文档内容，零网络成本，精确路径读取
+- **运行时两步查询**：`memory_recall` 匹配摘要 → 提取路径 → `get-module-info` 读取原文
+- **渐进式读取**：AI Agent 自主判断是否需要读取文件内容头部来丰富摘要，不依赖固定阈值
 
 ---
 
@@ -192,7 +230,8 @@ flowchart LR
 | **QueryRouter** | 双路径路由：接收 Group + Relation，先查 RelationCache，命中走本地 KB，未命中走同步引擎 | RelationCache, RelationSyncEngine |
 | **SyncRelationScript** | 回写脚本：接收 AI 提供的 relation + 模块信息 + 关键词，校验关键词真实性，写入 Relation 缓存 + 本地 KB；支持批量 JSON 输入 | RelationCache, KnowledgeBaseStore |
 | **KnowledgeGapDetector** | 知识缺失检测：当本地 KB 和记忆系统均未命中时，触发知识补充流程（扫描→总结→写入） | 无 |
-| **KbImporter** | 外部知识库导入：扫描外部目录，按映射规则转换为 Group/Relation 结构，批量写入本地 KB + 记忆系统 | GroupIndexManager, SyncRelationScript |
+| **KbImporter** | 外部知识库导入：扫描外部目录，按映射规则转换为 Group/Relation 结构，批量写入本地 KB，复用预扫描生成的关键词 | GroupIndexManager, SyncRelationScript |
+| **KbScanner** | 外部知识库预扫描：扫描外部目录结构+文件标题，AI 自主判断是否读取内容头部，为每篇文档生成总结性摘要+关键词，写入 scan-index.json | GroupIndexManager |
 | **ScoreEngine** | 评分计算与淘汰：评分递增（每次命中 +1）、最低分查找、淘汰触发阈值判断 | 无 |
 
 ### 6.2 关键模块设计要点
@@ -225,13 +264,20 @@ flowchart LR
   - 设计取舍：匹配度判断由 AI 自行决策，本模块仅提供辅助信息（如原始查询 vs 返回摘要的相似度提示）
 
 - **KbImporter**：
-  - 公开方法：`import(scope, sourceDir, rootName, mappingConfig)` → 扫描外部目录并批量写入
+  - 公开方法：`import(scope, sourceDir, rootName, mappingConfig, scanIndex?)` → 扫描外部目录并批量写入
   - 支持两种映射模式：
     1. **约定模式**（零配置）：目录结构即 Group 树，文件名即 Relation，文件内容即模块信息
     2. **配置模式**：通过映射配置文件（`import-mapping.json`）自定义目录→Group、文件→Relation 的映射规则
-  - 导入流程：创建导入根节点 → 扫描文件 → 解析映射 → 生成 Group 树 + Relations → 批量写入本地 KB → 可选写入记忆系统
-  - 关键约束：导入的知识不生成关键词（不在向量库中，关键词无检索价值）；导入根节点与自建根节点隔离
+  - 导入流程：创建导入根节点 → 扫描文件 → 解析映射 → 生成 Group 树 + Relations → 批量写入本地 KB
+  - 关键词复用：如果提供了 scan-index.json，导入时直接复用预扫描生成的关键词，不再重新生成
   - 设计取舍：约定模式优先（零配置即可用），配置模式作为高级覆盖；导入为一次性操作，不做增量同步
+
+- **KbScanner**：
+  - 公开方法：`scan(scope, sourceDir, rootName)` → 扫描外部目录，生成摘要+关键词，写入 scan-index.json；`vectorize(scope, scanIndex)` → 将 scan-index.json 中的摘要批量写入记忆系统
+  - 渐进式读取策略：先读取目录层级+文件名，交由 AI Agent 判断摘要信息量是否充足；若不足，AI 自主决定读取文件前 N 行 + 所有 Markdown 二级标题（`##`）来补充
+  - 摘要质量标准：每篇文档 3~5 句总结性描述，涵盖核心职责、关键业务流程、涉及的主要模块或组件
+  - 关键约束：关键词由 AI 生成，禁止代码符号（类名、方法名、路径等），仅自然语言词汇
+  - 设计取舍：渐进式读取由 AI 判断而非固定阈值，灵活但依赖 AI 能力；摘要做发现层而非原文向量化，成本低且语义匹配更好
 
 ---
 
@@ -244,7 +290,8 @@ flowchart LR
 | `scripts/query-group.mjs` | JS | 查询 Group：传入 Group 路径，返回热门 Relation + 关键词词云 |
 | `scripts/get-module-info.ts` | TS | 模块检索：传入 Relation，从本地 KB 读取 Markdown 文本 |
 | `scripts/sync-relation.ts` | TS | 关系回写：接收 AI 提供的 relation + 模块信息 + 关键词，校验关键词真实性，写入缓存 + 本地 KB；支持批量 JSON 输入 |
-| `scripts/import-kb.ts` | TS | 外部知识库导入：扫描外部目录，按映射规则转换为 Group/Relation 结构，批量写入本地 KB |
+| `scripts/import-kb.ts` | TS | 外部知识库导入：扫描外部目录，按映射规则转换为 Group/Relation 结构，批量写入本地 KB，复用预扫描关键词 |
+| `scripts/scan-kb.ts` | TS | 外部知识库预扫描：扫描目录+标题（必要时内容头部），生成摘要+关键词，写入 scan-index.json；支持摘要向量化 |
 | `scripts/manage-index.mjs` | JS | 索引管理：新建/删除 Group 节点 |
 
 ### 7.2 query-group.mjs
@@ -394,27 +441,28 @@ JSON 文件格式:
 
 ### 7.5 import-kb.ts
 
-支持两种映射模式将外部知识库导入本地 KB。
+支持两种映射模式将外部知识库导入本地 KB。导入前建议先执行 `scan-kb.ts` 预扫描，导入时通过 `--scan-index` 复用扫描结果中的关键词。
 
 #### 约定模式（零配置）
 
 ```
 用法: npx jiti scripts/import-kb.ts --scope <scope> --source <sourceDir>
-       --root-name <rootName> [--sync-memory]
+       --root-name <rootName> [--scan-index <scanIndexFile>]
 
 输入:
   --source        外部知识库根目录路径（必填），目录结构即 Group 树
   --scope         项目隔离标识（必填）
   --root-name     导入根节点名称（必填），用于区分自建知识和导入知识
                   例如 "wiki"、"docs"、"confluence"，不可与已有根节点重名
-  --sync-memory   是否同步写入记忆系统（可选，默认 false）
+  --scan-index    扫描索引文件路径（可选），由 scan-kb.ts 生成
+                  提供后复用其中的关键词，不再重新生成
 
 约定规则:
   - 导入根节点：在 Group 树中创建独立的根节点（由 --root-name 指定），与自建的"项目根"隔离
   - 目录 → Group：子目录名即为 Group 节点名，嵌套目录即为子 Group
   - 文件 → Relation：.md 文件名（去掉扩展名）即为 Relation 描述文本
   - 文件内容 → 模块信息：.md 文件正文即为模块信息
-  - 不生成关键词：导入的知识不在向量库中，关键词无语义检索价值，因此不生成
+  - 关键词复用：如提供 --scan-index，从 scan-index.json 中读取对应文件的关键词；未提供则关键词为空
   - 非法文件（非 .md）跳过，不报错
 
 示例目录结构:
@@ -448,14 +496,14 @@ JSON 文件格式:
 
 ```
 用法: npx jiti scripts/import-kb.ts --scope <scope> --source <sourceDir>
-       --mapping <mappingFile> --root-name <rootName> [--sync-memory]
+       --mapping <mappingFile> --root-name <rootName> [--scan-index <scanIndexFile>]
 
 输入:
   --source        外部知识库根目录路径（必填）
   --scope         项目隔离标识（必填）
   --mapping       映射配置文件路径（必填，JSON 格式）
   --root-name     导入根节点名称（必填），用于区分自建知识和导入知识
-  --sync-memory   是否同步写入记忆系统（可选，默认 false）
+  --scan-index    扫描索引文件路径（可选），由 scan-kb.ts 生成，提供后复用其中的关键词
 
 映射配置文件格式 (import-mapping.json):
 {
@@ -500,7 +548,7 @@ JSON 文件格式:
   - groups[].sources[].file: 相对于 --source 的文件路径
   - groups[].sources[].relation: 导入后的 Relation 描述文本
   - groups[].sources[].code_refs: 可选，代码定位符列表，格式见 8.5 节
-  - 不生成关键词：导入的知识不在向量库中，关键词无语义检索价值
+  - 不生成关键词：导入时关键词从 scan-index.json 复用，不由 import-kb.ts 自行生成
   - 同一文件可映射到不同 Group 下的不同 Relation
 
 输出 (JSON):
@@ -541,6 +589,81 @@ JSON 文件格式:
   - 默认根节点"项目根"不可删除
   - 删除非空节点需二次确认
   - create-root 创建新的根节点，用于手动创建导入根节点（import-kb.ts 会自动调用）
+```
+
+### 7.7 scan-kb.ts
+
+外部知识库预扫描脚本，分两个子命令：`scan`（生成摘要+关键词）和 `vectorize`（摘要向量化）。
+
+#### scan 子命令
+
+```
+用法: npx jiti scripts/scan-kb.ts scan --scope <scope> --source <sourceDir>
+       --root-name <rootName> [--output <outputFile>]
+
+输入:
+  --scope       项目隔离标识（必填）
+  --source      外部知识库根目录路径（必填）
+  --root-name   导入根节点名称（必填），与 import-kb.ts 保持一致
+  --output      扫描索引文件输出路径（可选，默认 kb/{scope}/scan-index.json）
+
+行为:
+  1. 递归扫描 --source 目录，收集所有 .md 文件的路径、目录层级、文件名
+  2. 将每个文件的路径信息交给 AI Agent，AI 判断仅靠路径+文件名是否足以生成总结性摘要
+  3. 若 AI 判断信息不足，自主决定读取文件前 N 行 + 所有 Markdown 二级标题（##）来补充
+  4. AI 为每篇文档生成 3~5 句总结性摘要（涵盖核心职责、关键流程、涉及模块）+ 自然语言关键词
+  5. 将所有结果写入 scan-index.json
+
+输出 (JSON):
+{
+  "ok": true,
+  "root_name": "wiki",
+  "total_files": 12,
+  "scanned": 12,
+  "enriched": 5,
+  "output": "kb/project-a/scan-index.json"
+}
+
+异常:
+  - --source 目录不存在 → 报错退出
+  - .md 文件内容为空 → 跳过该文件，记入 warnings
+  - AI 摘要生成失败 → 跳过该文件，记入 errors，继续处理其余
+```
+
+#### vectorize 子命令
+
+```
+用法: npx jiti scripts/scan-kb.ts vectorize --scope <scope>
+       [--scan-index <scanIndexFile>]
+
+输入:
+  --scope        项目隔离标识（必填）
+  --scan-index   扫描索引文件路径（可选，默认 kb/{scope}/scan-index.json）
+
+行为:
+  1. 读取 scan-index.json
+  2. 筛选 vectorized: false 的条目
+  3. 对每条摘要调用 memory_store 写入记忆系统，content 中包含摘要文本 + 文档路径标记
+  4. 写入成功后更新 vectorized: true + memoryId
+
+摘要向量化格式:
+  写入记忆系统的内容格式：
+  [摘要] {summary 文本}
+  [路径] {rootName}/{Group}/{文件名}
+  [关键词] {keywords 逗号分隔}
+
+输出 (JSON):
+{
+  "ok": true,
+  "vectorized": 10,
+  "skipped": 2,
+  "errors": []
+}
+
+异常:
+  - scan-index.json 不存在 → 报错退出，提示"请先执行 scan 子命令"
+  - 记忆系统不可用 → 报错退出，不修改 scan-index.json 状态
+  - 单条向量化失败 → 记入 errors，继续处理其余，该条 vectorized 保持 false
 ```
 
 ---
@@ -626,7 +749,7 @@ JSON 文件格式:
           "id": "rel_101",
           "text": "告警规则CRUD流程",
           "score": 0,
-          "keywords": [],
+          "keywords": ["规则", "阈值", "CRUD", "触发条件"],
           "isImported": true
         }
       ],
@@ -646,7 +769,7 @@ JSON 文件格式:
   2. 从回收 Relation 中提取 keywords 合并到 `word_cloud_keywords`
 - `word_cloud_keywords` 自动去重
 - `max_hot_count` 可配置（默认 10）
-- `isImported: true` 的 Relation：keywords 为空、score 为 0、不参与评分淘汰
+- `isImported: true` 的 Relation：keywords 从预扫描结果复用、score 为 0、不参与评分淘汰
 
 ### 8.3 本地 KB 目录结构
 
@@ -655,6 +778,7 @@ kb/
 ├── project-a/
 │   ├── group-index.json          # Group 树索引
 │   ├── relations-cache.json      # Relations 缓存
+│   ├── scan-index.json           # 预扫描索引（摘要+关键词+向量化状态）
 │   ├── 部署/
 │   │   └── index.json            # Relation → Markdown 映射
 │   ├── 监控/
@@ -727,7 +851,57 @@ kb/
 - 评分范围：0 ~ N，无上限，不使用衰减
 - 代码定位符：必须为相对路径，可选附加类名/方法名（格式：`path: Class.method`）
 - 关键词规则：禁止使用代码符号（类名、方法名、路径、文件名等），仅使用自然语言词汇，避免代码信息带来的语义检索精度损失
-- 导入知识：不生成关键词（因不在向量库中，关键词无检索价值）；不参与缓存评分和淘汰逻辑
+- 导入知识：关键词由预扫描生成并复用；摘要向量化存入记忆系统；原文仅存本地 KB
+- 摘要质量标准：3~5 句总结性描述，涵盖核心职责、关键业务流程、涉及模块，不是标题复述
+
+### 8.6 扫描索引文件（scan-index.json）
+
+文件路径：`kb/{scope}/scan-index.json`
+
+```json
+{
+  "scope": "project-a",
+  "rootName": "wiki",
+  "sourceDir": "./docs",
+  "scannedAt": "2026-05-22T10:00:00Z",
+  "entries": [
+    {
+      "path": "监控/告警中心/告警规则CRUD流程.md",
+      "fullPath": "wiki/监控/告警中心/告警规则CRUD流程",
+      "summary": "告警中心下的规则管理模块，支持静态/动态阈值规则的创建、查询、更新、删除。规则创建时校验阈值合法性，支持静默聚合和分级触发。涉及 AlertController、AlertService、AlertRepository 三层调用链。",
+      "keywords": ["规则", "阈值", "CRUD", "触发条件", "静默", "聚合"],
+      "enriched": false,
+      "vectorized": true,
+      "memoryId": "mem_abc123"
+    },
+    {
+      "path": "部署/item-a.md",
+      "fullPath": "wiki/部署/item-a",
+      "summary": "前端部署流程文档，涵盖 npm 构建、CDN 分发、环境配置和回滚策略。构建产物通过 CI/CD 自动上传至 CDN，支持蓝绿发布和快速回滚。",
+      "keywords": ["前端", "部署", "CDN", "构建", "回滚"],
+      "enriched": true,
+      "vectorized": false,
+      "memoryId": null
+    }
+  ],
+  "stats": {
+    "total": 12,
+    "scanned": 12,
+    "enriched": 5,
+    "vectorized": 10
+  }
+}
+```
+
+**设计要点**：
+- `path`：相对于 --source 的文件路径，用于 import-kb.ts 匹配
+- `fullPath`：含根节点前缀的完整 Group 路径，用于向量化时嵌入摘要内容
+- `summary`：3~5 句总结性描述，语义密度高，作为向量化内容主体
+- `keywords`：自然语言关键词，由 AI 生成，禁止代码符号
+- `enriched`：是否读取了文件内容头部来丰富摘要（`true` 表示文件名信息不足，已补充读取）
+- `vectorized`：是否已向量化到记忆系统，用于增量向量化（仅处理 `false` 的条目）
+- `memoryId`：记忆系统中的记录 ID，向量化成功后填入
+- 渐进式读取由 AI 判断：AI 根据路径+文件名判断信息量是否充足，自主决定是否读取更多内容
 
 ---
 
@@ -846,7 +1020,7 @@ sequenceDiagram
 
 ### 9.4 外部知识库导入路径（项目已有文档 → 批量导入）
 
-当项目已有文件系统形式的知识库（如 `docs/` 目录下的 Markdown 文件集合），可通过 `import-kb.ts` 一次性导入，无需从零构建本地 KB。
+当项目已有文件系统形式的知识库（如 `docs/` 目录下的 Markdown 文件集合），先通过 `scan-kb.ts` 预扫描生成摘要+关键词并摘要向量化，再通过 `import-kb.ts` 导入本地 KB（复用关键词）。
 
 #### 约定模式导入
 
@@ -854,9 +1028,9 @@ sequenceDiagram
 sequenceDiagram
     participant USER as 用户
     participant AI as AI 智能体
+    participant SCAN as scan-kb.ts
     participant IMP as import-kb.ts
     participant GIM as GroupIndexManager
-    participant SR as sync-relation.ts
     participant MCP as memory_store (MCP)
     participant KB as 本地 KB (JSON)
 
@@ -864,28 +1038,26 @@ sequenceDiagram
 
     Note over AI: AI 检查 docs/ 目录结构<br/>确认符合约定（目录=Group，.md=Relation）<br/>与用户协商导入根节点名称
 
-    AI->>IMP: import-kb --scope project-a --source ./docs --root-name wiki
-    IMP->>IMP: 递归扫描 ./docs 目录<br/>收集 .md 文件和目录结构
-    IMP->>GIM: 创建导入根节点 "wiki"<br/>批量创建子 Group 节点（目录→Group）
+    AI->>SCAN: scan-kb scan --scope project-a<br/>--source ./docs --root-name wiki
+    Note over SCAN: 扫描目录结构+文件名<br/>AI 判断信息量是否充足<br/>必要时读取文件头部补充<br/>生成摘要+关键词
+    SCAN-->>AI: scan-index.json 已生成
+
+    AI->>SCAN: scan-kb vectorize --scope project-a
+    Note over SCAN: 摘要 → memory_store<br/>仅向量化未处理的条目
+    SCAN-->>AI: 摘要向量化完成
+
+    AI->>IMP: import-kb --scope project-a --source ./docs<br/>--root-name wiki --scan-index scan-index.json
+    IMP->>GIM: 创建导入根节点 "wiki"<br/>批量创建子 Group 节点
     GIM-->>IMP: ok
 
     loop 每个 .md 文件
-        IMP->>IMP: 文件名→Relation 描述<br/>文件内容→模块信息<br/>不生成关键词
+        IMP->>IMP: 文件名→Relation 描述<br/>文件内容→模块信息<br/>关键词从 scan-index 复用
         IMP->>KB: 写入 kb/project-a/wiki/{Group}/index.json
     end
 
     IMP-->>AI: { ok: true, root_name: "wiki", groups_created: 4, relations_imported: 5, ... }
 
-    opt --sync-memory 启用
-        loop 每个 Relation
-            AI->>SR: sync-relation --scope project-a --input /tmp/import-batch.json
-            SR-->>AI: ok
-            AI->>MCP: memory_store(content=..., scope="project-a")
-            MCP-->>AI: ok
-        end
-    end
-
-    Note over AI,KB: 导入完成<br/>本地 KB 已就绪（wiki 根节点隔离），可选同步至记忆系统
+    Note over AI,KB: 导入完成<br/>摘要已向量化（发现层），原文已导入本地 KB（交付层）
 ```
 
 #### 配置模式导入
@@ -894,9 +1066,9 @@ sequenceDiagram
 sequenceDiagram
     participant USER as 用户
     participant AI as AI 智能体
+    participant SCAN as scan-kb.ts
     participant IMP as import-kb.ts
     participant GIM as GroupIndexManager
-    participant SR as sync-relation.ts
     participant MCP as memory_store (MCP)
     participant KB as 本地 KB (JSON)
 
@@ -908,34 +1080,89 @@ sequenceDiagram
 
     USER-->>AI: 确认映射方案
 
-    AI->>IMP: import-kb --scope project-a --source ./docs<br/>--mapping ./import-mapping.json --root-name wiki --sync-memory
-    IMP->>IMP: 读取映射配置<br/>创建导入根节点 "wiki"<br/>按 groups 逐条处理
+    AI->>SCAN: scan-kb scan --scope project-a<br/>--source ./docs --root-name wiki
+    Note over SCAN: 扫描 + AI 判断 + 生成摘要
+    SCAN-->>AI: scan-index.json 已生成
+
+    AI->>SCAN: scan-kb vectorize --scope project-a
+    SCAN-->>AI: 摘要向量化完成
+
+    AI->>IMP: import-kb --scope project-a --source ./docs<br/>--mapping ./import-mapping.json --root-name wiki<br/>--scan-index scan-index.json
     IMP->>GIM: 创建映射中指定的 Group 路径（在 wiki 根节点下）
     GIM-->>IMP: ok
 
     loop 每条映射
-        IMP->>IMP: 读取源文件 → 提取内容<br/>使用映射中的 relation 和 code_refs<br/>不生成关键词
+        IMP->>IMP: 读取源文件 → 提取内容<br/>使用映射中的 relation 和 code_refs<br/>关键词从 scan-index 复用
         IMP->>KB: 写入 kb/project-a/wiki/{Group}/index.json
     end
 
     IMP-->>AI: { ok: true, root_name: "wiki", groups_created: 2, relations_imported: 4, ... }
 
-    IMP->>SR: 内部调用 syncBatch 写入缓存（keywords 为空）
-    SR-->>IMP: ok
-
-    loop 每个 Relation
-        AI->>MCP: memory_store(content=..., scope="project-a")
-        MCP-->>AI: ok
-    end
+    Note over AI,KB: 导入完成<br/>摘要已向量化（发现层），原文已导入本地 KB（交付层）
 ```
 
 **关键规则**：
 - **根节点隔离**：导入的外部知识库必须在独立的根节点下（如"wiki"），与自建知识的"项目根"严格隔离，避免两类知识混合
-- **不生成关键词**：导入的知识不在向量库中，关键词无语义检索价值，因此导入时不生成关键词
+- **预扫描先行**：导入前先执行 `scan-kb.ts` 生成摘要+关键词并摘要向量化，导入时通过 `--scan-index` 复用关键词
+- **摘要做发现、原文做交付**：摘要向量化后 AI 可通过语义检索发现知识路径，再按路径精确读取本地 KB 原文
 - **约定优先**：如果外部知识库目录结构清晰（目录=领域，文件=主题），直接用约定模式零配置导入
 - **配置兜底**：目录结构不规整或需要重命名时，由 AI 与用户协商生成映射配置，再执行配置模式导入
 - **幂等安全**：重复导入同一目录不会产生重复 Relation，已存在的 Relation 会被覆盖更新
-- **记忆系统可选同步**：`--sync-memory` 控制是否同时写入记忆系统，导入阶段可先只写本地 KB，后续按需同步
+- **运行时两步查询**：AI 通过 `memory_recall` 匹配摘要 → 提取路径标记 → 调用 `get-module-info` 读取原文
+
+### 9.5 预扫描路径（外部知识库 → 摘要生成 → 向量化）
+
+外部知识库导入前的预扫描流程，由 `scan-kb.ts` 执行，分两步：scan（生成摘要+关键词）和 vectorize（摘要向量化）。
+
+```mermaid
+sequenceDiagram
+    participant AI as AI 智能体
+    participant SCAN as scan-kb.ts
+    participant AIJUDGE as AI 判断<br/>信息量是否充足
+    participant SOURCE as 外部 docs/ 目录
+    participant SCANIDX as scan-index.json
+    participant MCP as memory_store (MCP)
+
+    AI->>SCAN: scan-kb scan --scope project-a<br/>--source ./docs --root-name wiki
+    SCAN->>SOURCE: 递归扫描目录，收集 .md 文件列表
+
+    loop 每个 .md 文件
+        SCAN->>AIJUDGE: 提供路径+文件名<br/>"监控/告警中心/告警规则CRUD流程.md"
+        AIJUDGE-->>SCAN: 信息充足，可直接生成摘要
+        Note over SCAN: 生成 3~5 句总结性摘要<br/>+ 自然语言关键词
+        Note over SCAN: enriched: false
+    end
+
+    loop 文件名信息不足的文件
+        SCAN->>AIJUDGE: 提供路径+文件名<br/>"部署/item-a.md"
+        AIJUDGE-->>SCAN: 信息不足，需要读取内容
+        SCAN->>SOURCE: 读取文件前 N 行<br/>+ 所有 Markdown 二级标题
+        SOURCE-->>SCAN: 内容头部信息
+        Note over SCAN: 基于路径+内容头部<br/>生成总结性摘要+关键词
+        Note over SCAN: enriched: true
+    end
+
+    SCAN->>SCANIDX: 写入所有条目<br/>path/summary/keywords/enriched
+    SCANIDX-->>AI: { ok: true, scanned: 12, enriched: 5 }
+
+    AI->>SCAN: scan-kb vectorize --scope project-a
+    SCAN->>SCANIDX: 读取 vectorized: false 的条目
+
+    loop 每个未向量化条目
+        SCAN->>MCP: memory_store(<br/>content="[摘要] ... [路径] ... [关键词] ...",<br/>scope="project-a")
+        MCP-->>SCAN: { ok: true, memory_id: "mem_xxx" }
+        SCAN->>SCANIDX: 更新 vectorized: true, memoryId
+    end
+
+    SCANIDX-->>AI: { ok: true, vectorized: 10, skipped: 0, errors: [] }
+```
+
+**关键规则**：
+- **渐进式读取由 AI 判断**：不依赖固定阈值（如文件名长度），AI 自主决定是否需要读取文件内容头部
+- **摘要质量优先**：每篇文档 3~5 句总结性描述，涵盖核心职责、关键流程、涉及模块，不是标题复述
+- **关键词禁止代码符号**：与自建知识一致，仅自然语言词汇，避免路径/类名/方法名干扰语义检索
+- **摘要向量化格式含路径标记**：`[摘要] ... [路径] ... [关键词] ...`，确保 `memory_recall` 返回时 AI 可提取路径去读原文
+- **增量向量化**：仅处理 `vectorized: false` 的条目，已向量化的不重复处理
 
 ---
 
@@ -963,6 +1190,13 @@ sequenceDiagram
 | import-kb 映射文件中引用的文件不存在 | 跳过该条，记入 errors，继续处理其余 | 是 |
 | import-kb .md 文件内容为空 | 跳过该条，记入 errors | 是 |
 | import-kb 重复导入同一目录 | 幂等：已存在的 Relation 覆盖更新，不产生重复 | 否 |
+| scan-kb --source 目录不存在 | 报错退出，提示"源目录路径不存在" | 是 |
+| scan-kb .md 文件内容为空 | 跳过该文件，记入 warnings | 是（警告） |
+| scan-kb AI 摘要生成失败 | 跳过该文件，记入 errors，继续处理其余 | 是 |
+| scan-kb vectorize 时 scan-index.json 不存在 | 报错退出，提示"请先执行 scan 子命令" | 是 |
+| scan-kb vectorize 单条向量化失败 | 记入 errors，继续处理其余，该条 vectorized 保持 false | 是 |
+| scan-kb vectorize 时记忆系统不可用 | 报错退出，不修改 scan-index.json 状态 | 是 |
+| import-kb 未提供 --scan-index | 正常导入，关键词为空，不影响本地 KB 功能 | 否（警告） |
 
 ---
 
@@ -974,6 +1208,8 @@ sequenceDiagram
   - Group 树索引读取：<5ms（单 JSON 文件读取 + 解析）
   - 快速路径：<10ms（两次文件读取：缓存 + KB）
   - 检索路径：依赖 memory_recall 响应时间（通常 500ms~2s）
+  - 预扫描：目录扫描 + AI 摘要生成，每个文件 1~5s（取决于是否需读取内容头部），100 个文件约 2~5 分钟
+  - 摘要向量化：每个文件一次 memory_store 调用，100 个文件约 1~2 分钟
 - **关键瓶颈点**：Relations 缓存 JSON 文件随 Relation 增长而变大，需要定期压缩（见 11.1 不做的优化）
 - **不做的优化**：
   - 不做内存缓存（每次读取文件，保持简单一致）
@@ -998,8 +1234,10 @@ sequenceDiagram
 | 集成测试 | query-group.mjs → get-module-info.ts 端到端快速路径 | Node.js test runner + 临时本地 KB |
 | 集成测试 | 检索路径全链路：关键词组装 → MCP memory_recall → sync-relation.ts 回写缓存 | 需 MCP 服务可用 |
 | 集成测试 | 知识缺失路径：本地 KB + 记忆系统均未命中 → AI 提示用户 → 扫描总结 → 双写 | 需 MCP 服务可用 |
-| 集成测试 | 外部知识库导入（约定模式）：临时 docs/ 目录 → import-kb → 验证 Group 树 + Relations + KB 内容 | Node.js test runner + 临时目录 |
-| 集成测试 | 外部知识库导入（配置模式）：映射文件 → import-kb → 验证自定义映射正确性 | Node.js test runner + 临时目录 |
+| 集成测试 | 外部知识库导入（约定模式）：临时 docs/ 目录 → scan-kb → vectorize → import-kb → 验证 Group 树 + Relations + KB 内容 + scan-index | Node.js test runner + 临时目录 |
+| 集成测试 | 外部知识库导入（配置模式）：映射文件 → scan-kb → import-kb → 验证自定义映射正确性 | Node.js test runner + 临时目录 |
+| 集成测试 | 预扫描渐进式读取：文件名信息充足 vs 不足的文件，验证 enriched 标记正确 | Node.js test runner + 临时目录 |
+| 集成测试 | 摘要向量化：scan-kb vectorize → 验证 memory_store 调用内容含路径标记 + 增量向量化仅处理未处理条目 | Node.js test runner + mock MCP |
 | 边界测试 | import-kb 重复导入幂等性；空 .md 文件跳过；映射文件引用不存在文件跳过 | Node.js test runner |
 | 边界测试 | scope 未指定报错；损坏 JSON 降级；空 Group 返回空列表；并发写入无崩溃 | Node.js test runner |
 | 隔离测试 | 验证 scope-a 查询不到 scope-b 的 Relation 和 KB | Node.js test runner |
@@ -1017,7 +1255,7 @@ sequenceDiagram
 |------|------|---------|------|
 | Batch 1 | 数据模型与本地KB | `scripts/manage-index.mjs`、Group 树 JSON Schema、Relations 缓存 JSON Schema、本地 KB 目录模板、`_template/` 初始化文件 | 无 |
 | Batch 2 | 核心脚本 | `scripts/query-group.mjs`（查询+词云生成）、`scripts/get-module-info.ts`（本地KB读取）、`scripts/sync-relation.ts`（回写+关键词校验）、ScoreEngine + RelationCache 淘汰逻辑 | Batch 1 |
-| Batch 3 | 导入与集成 | `scripts/import-kb.ts`（约定模式+配置模式）、`skills/knowledge-index/SKILL.md`（AI 指令文件，含知识缺失流程+导入流程指引）、端到端测试（快速路径+检索路径+知识缺失路径+导入路径）、文档完善 | Batch 1, 2 |
+| Batch 3 | 导入与预扫描 | `scripts/scan-kb.ts`（scan+vectorize 子命令）、`scripts/import-kb.ts`（约定模式+配置模式+关键词复用）、`skills/knowledge-index/SKILL.md`（AI 指令文件，含知识缺失流程+导入流程+预扫描流程+运行时两步查询指引）、端到端测试（快速路径+检索路径+知识缺失路径+导入路径+预扫描路径）、文档完善 | Batch 1, 2 |
 
 ---
 
@@ -1031,6 +1269,7 @@ sequenceDiagram
 | Relations 缓存 JSON 持续膨胀 | 文件过大导致读取变慢 | 设置 `max_hot_count` 上限 + 冷数据→词云降级；必要时拆分文件 |
 | 淘汰后 Relation 退化为关键词，AI 再次检索时可能构造出低质量查询 | 检索命中率下降 | 关键词保留上限（默认 50 个），超量时淘汰最低频关键词 |
 | 并发场景下文件覆盖导致数据丢失 | 评分、缓存更新丢失 | 初期接受最后写入胜出；高并发场景后续考虑文件锁 |
+| 预扫描摘要质量不稳定 | 文件名模糊时摘要可能不准确，影响语义检索匹配 | 渐进式读取由 AI 判断补充内容头部；必要时可人工修正 scan-index.json 中的摘要 |
 
 ### 14.2 待定问题（Open Questions）
 
@@ -1039,3 +1278,5 @@ sequenceDiagram
 - [ ] Group 树的生成是否可以结合代码静态分析工具（如 madge）部分自动化？
 - [ ] 关键词是否需要评分/频次？当前设计无关键词衰减，词云只会增大不会缩小
 - [ ] **[待讨论]** 是否需要 `scripts/batch-vectorize.ts` 批量向量化脚本？外部知识库内容量大时，逐条调用 MCP `memory_store` 效率低。需要先确认：本记忆系统本地存储的向量知识量级上限是多少？是否支持 CLI 批量灌入？
+- [ ] 是否需要在 scan-index.json 中加入 fileHash 字段，用于增量扫描时跳过未变更的文件？当前每次全量扫描，文档数量大时成本可能较高
+- [ ] 摘要质量是否需要人工抽检机制？纯 AI 判断可能存在系统性偏差
