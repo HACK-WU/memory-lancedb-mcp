@@ -6,6 +6,8 @@
 
 > 感谢 CortexReach 团队开源 memory-lancedb-pro，本项目基于其核心能力进行 MCP 协议桥接与扩展。
 
+> **使用手册**：[docs/USAGE_GUIDE.md](./docs/USAGE_GUIDE.md) — 全面的 CLI + MCP 工具使用指南，包含存储/召回最佳实践、标签系统、故障排除等。
+
 ## Features
 
 - **17 个记忆工具**暴露为 MCP tools（recall, store, forget, update, stats, list, debug, promote, archive, compact, explain_rank, self-improvement, 以及 3 个生命周期工具）
