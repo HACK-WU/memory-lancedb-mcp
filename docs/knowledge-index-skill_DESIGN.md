@@ -1,0 +1,1041 @@
+# 知识索引 SKILL 设计文档
+
+> - 状态：草案
+> - 起草时间：2026-05-22
+> - 关联文档：无
+> - 实施范围：新建 scripts/ + kb/ + skills/ 目录下的 SKILL.md，不修改现有 src/
+
+## 1. 需求背景 & 目标
+
+### 1.1 背景
+
+当前 memory-lancedb-pro 已提供混合检索（向量 + BM25）和记忆生命周期管理能力，但 AI 智能体每次检索项目知识都需走一次网络请求。同时，项目代码模块多、调用链复杂，AI 需要一个轻量级导航入口来快速定位"要查什么"——而非每次从零开始语义搜索。此外，多项目场景下需要按 scope 隔离各自的索引、缓存和本地知识库。
+
+### 1.2 目标
+
+- 目标 1：AI 首次接触项目时，可通过 Group 树索引一次获取完整知识导航结构，无需多次试探查询
+- 目标 2：热门知识走本地 JSON 快速路径（<10ms），避免重复语义检索的网络成本
+- 目标 3：冷门知识退化为关键词词云，引导 AI 自行组装 Relation 再走语义检索，保证覆盖率
+- 目标 4：按 scope 隔离项目数据，MCP 启动参数 `--scope` 全链路传递至脚本和本地存储
+- 目标 5：知识缺失时 AI 主动暂停并引导用户补充，通过定向扫描→总结→双写完成知识闭环
+- 目标 6：支持将项目已有的文件系统形式知识库快速导入，无需从零构建本地 KB
+
+### 1.3 明确不在范围内
+
+- 不涉及 memory-lancedb-pro 内部检索算法修改
+- 不涉及 LLM 嵌入/向量生成（本地 JSON 只做精确 key 查找）
+- 不涉及 scope 机制本身的实现（复用已有 `--scope` 参数）
+- 不涉及 Group 索引的自动生成（由开发者通过管理脚本手动创建，或通过 import-kb.ts 从外部知识库导入）
+- 不涉及 UI/可视化界面
+
+---
+
+## 2. 名词术语表
+
+| 术语 | 含义 | 易混淆点 |
+|------|------|---------|
+| **Group** | 索引树的节点，按业务领域命名（如"监控/告警中心"），构成树形结构，有不可变根节点 | 不是记忆分类（如 Profile/Preferences），是项目特定的知识分区 |
+| **Relation** | 一个 Group 下的细粒度描述短语，类似文章标题（如"告警规则CRUD流程"） | 不是 memory_id，是本地缓存的查询 key |
+| **模块信息** | Relation 对应的 Markdown 纯文本知识内容（调用流程、架构、关联模块等） | 不是代码文件本身，是对代码知识的归纳总结 |
+| **关键词** | 从已被淘汰或冷门 Relation 中提取的语义标签，组成词云供 AI 组装查询 | 不是 tags；关键词无结构，纯用于语义检索的查询构造 |
+| **词云** | 当 Relation 数量超过展示阈值时，未展示的 Relation 退化为关键词集合 | 不是可视化词云，是对 LLM 暴露的关键词列表 |
+| **双路径路由** | 快速路径（本地 JSON 命中）→ 零成本；检索路径（组装关键词 → 记忆系统语义检索）→ 有成本 | 不是二选一互斥，是先尝试快速路径、失败后回退检索路径 |
+| **Scope** | 项目隔离标识，MCP 启动时指定，所有脚本和存储路径均按 scope 命名空间隔离 | 与 memory-lancedb-pro 已有的 `--scope` 参数语义一致 |
+| **评分** | Relation 的使用频次指标，值越大表示越常被命中 | 不是 Weibull 衰减分，是独立的缓存热度分 |
+| **外部知识库** | 项目已有的文件系统形式知识库（如 docs/ 目录下的 Markdown 文件集合），可作为本地 KB 的数据源 | 不是 memory-lancedb-pro 的记忆数据，是项目自带的文档资产 |
+| **导入映射** | 描述外部知识库目录/文件到 Group/Relation 结构的映射规则，用于批量导入 | 不是 Group 树本身，是外部→内部的转换配置 |
+| **导入根节点** | 外部知识库导入时自动创建的专属根节点，用于区分自建知识和导入知识，避免混合 | 不是默认的"项目根"节点，命名由 `--root-name` 指定（如"wiki"） |
+| **代码定位符** | 模块信息中附带的代码路径引用，格式为相对路径 + 可选的类名/方法名，帮助 AI 快速定位源码 | 不是完整的代码内容，是路径级别的精确定位 |
+| **批量向量化** | 将外部知识库内容批量写入记忆系统（向量存储）的过程，由独立脚本完成 | 不是本地 KB 写入，是向记忆系统的批量灌入 |
+
+---
+
+## 3. 现状分析（AS-IS）
+
+### 3.1 现有实现
+
+memory-lancedb-pro 已具备：
+- **混合检索**：向量（ANN）+ BM25 + Cross-Encoder 重排序
+- **记忆生命周期**：Weibull 衰减 + 三级晋升（Peripheral/Working/Core）
+- **MCP 工具**：`memory_recall`、`memory_store`、`memory_forget`、`memory_update` 等
+- **Scope 隔离**：`--scope` 启动参数 + 工具级 scope 参数
+
+但 AI 智能体每次查询都需要：
+1. 构造自然语言查询语句
+2. 调用 `memory_recall` MCP 工具（网络请求 + 向量检索 + 重排序）
+3. 从返回结果中筛选相关知识
+
+### 3.2 痛点
+
+- **无导航入口**：AI 不知道项目有哪些知识域，只能通过试探性查询逐步了解
+- **重复检索成本**：热门知识（如"部署流程"）每次都被重复检索，即使内容未变
+- **冷门知识不可见**：低频 Relation 在缓存中消失后，AI 完全不知道其存在
+- **索引维护手工**：没有系统化的索引管理工具，靠人工记忆 Group 结构
+
+---
+
+## 4. 方案设计（TO-BE）
+
+### 4.1 方案概述
+
+在 memory-lancedb-pro 上层构建「Group 树索引 → Relations 缓存 → 本地 KB」三层文件系统。AI 通过一次 Group 索引查询获得项目知识全景；热门 Relation 直接走本地 JSON（TS 脚本），冷门 Relation 退化为关键词词云，AI 自行组装后走记忆系统语义检索。所有路径贯穿 scope 命名空间。
+
+### 4.2 关键决策点
+
+| 决策 | 选择 | 理由 | 被否决方案 |
+|------|------|------|-----------|
+| 本地 KB 存储 | JSON 文件 + 目录分层 | 零依赖、可 Git 版本控制、TS 脚本一行解析 | LanceDB：过度设计（无需向量检索）；SQLite：引入额外依赖 |
+| 模块信息格式 | Markdown 纯文本 + 代码定位符 | LLM 天然理解、人可直接读写；代码路径帮助 AI 快速定位源码 | 纯结构化 JSON：字段模板僵化；纯文本无代码路径：AI 需额外搜索定位 |
+| 淘汰策略 | 最低评分淘汰 | 与 Weibull 衰减思路一致，保留真正热门 | LRU 末尾淘汰：可能淘汰低频但重要的 Relation |
+| 淘汰后处理 | 退化为关键词保留在词云 | 不丢失语义锚点，仍可通过关键词回退检索 | 直接删除：数据彻底丢失，冷启动代价高 |
+| 查询脚本实现 | JS 脚本（`.mjs`） | 项目已有 jiti 基础设施，直接运行；JS 生态成熟 | TS 需额外编译步骤 |
+| 模块检索脚本 | TS 脚本（`.ts`） | 可用 jiti 直接执行，类型安全 | JS 无类型，容易传错参数 |
+| Scope 传递 | 全链路显式 `--scope` 参数 | 与 MCP 启动参数一致，无需额外配置 | 环境变量：隐式传递易出错 |
+| 记忆系统写入 | 仅通过 MCP `memory_store` 写入 | 记忆系统为权威数据源，本地 KB 是只读缓存副本 | 本地 KB 直接写入：导致双写一致性问题 |
+| 关键词规则 | 禁止代码符号，仅自然语言 | 代码路径/类名/方法名会引入噪音，降低语义检索精度 | 允许代码符号：检索时路径信息干扰向量匹配 |
+| 导入知识关键词 | 不生成 | 导入知识不在向量库中，关键词无检索价值 | 生成关键词：浪费存储且无实际用途 |
+| 导入根节点 | 独立根节点隔离 | 避免自建知识与导入知识混合，Group 路径天然隔离 | 共享根节点：两类知识混在一起，难以区分来源 |
+
+### 4.3 方案对比
+
+方案唯一，无需对比。
+
+### 4.4 与现状的差异
+
+| 现状 | 新方案 |
+|------|--------|
+| AI 每次检索都走 `memory_recall` 网络请求 | 热门知识走本地 JSON 直接读取，零网络请求 |
+| 无项目知识导航入口 | Group 树索引提供一次性全景导航 |
+| 无缓存机制，重复查询反复检索 | Relations 缓存 + 评分机制，高频知识常驻 |
+| scope 仅在记忆系统内部生效 | scope 贯穿索引、缓存、本地 KB 全链路 |
+| 知识缺失时 AI 无感知，反复空查 | 知识缺失时 AI 主动暂停，引导用户补充后扫描总结并双写 |
+| 项目已有文档无法复用，需从零构建 | 支持外部知识库导入，通过映射规则快速复用已有文档资产 |
+
+---
+
+## 5. 架构图 / 流程图
+
+### 5.1 总体数据流
+
+```mermaid
+flowchart TD
+    Q[AI 查询请求<br/>含 --scope 参数]
+    G[Group Index JSON<br/>纯 key 树结构]
+    R[Relations 缓存 JSON<br/>热门 Relation + 评分<br/>冷门→关键词词云]
+    ROUTE{路由判断<br/>Relation 是否命中?}
+    TS[TS 脚本 get-module-info<br/>--scope --relation]
+    KB[本地 KB<br/>kb/scope/Group/index.json]
+    KW[AI 组装关键词<br/>构造语义查询语句]
+    MCP[MCP memory_recall<br/>--scope scope]
+    PAUSE[AI 暂停 → 请求用户提供线索]
+    SCAN[AI 扫描代码 → 总结为多个 Relation]
+    DUAL[双写：sync-relation.ts + memory_store]
+    RES[返回 Markdown 文本]
+    CACHE[回写 Relation 缓存<br/>更新评分 / 淘汰最低分]
+
+    Q --> G
+    G --> R
+    R --> ROUTE
+    ROUTE -- "Relation 命中" --> TS
+    TS --> KB
+    KB --> RES
+    ROUTE -- "Relation 未命中" --> KW
+    KW --> MCP
+    MCP --> RES
+    MCP --> CACHE
+    ROUTE -- "本地+记忆均未命中" --> PAUSE
+    PAUSE --> SCAN
+    SCAN --> DUAL
+    DUAL --> RES
+
+    IMPORT[import-kb.ts<br/>外部知识库导入]
+    EXT[外部 docs/ 目录<br/>已有的 Markdown 文件]
+    EXT --> IMPORT
+    IMPORT --> G
+    IMPORT --> R
+    IMPORT --> KB
+
+    style TS fill:#7CB9B8,stroke:#4A7C7B
+    style KB fill:#7CB9B8,stroke:#4A7C7B
+    style KW fill:#9BB7D4,stroke:#6A8FAD
+    style MCP fill:#9BB7D4,stroke:#6A8FAD
+    style PAUSE fill:#C0B3D4,stroke:#9585AD
+    style SCAN fill:#C0B3D4,stroke:#9585AD
+    style DUAL fill:#C0B3D4,stroke:#9585AD
+    style IMPORT fill:#A8D5BA,stroke:#6BAF8A
+    style EXT fill:#A8D5BA,stroke:#6BAF8A
+```
+
+### 5.2 Scope 隔离层次
+
+```mermaid
+flowchart LR
+    MCP_START[MCP 启动<br/>--scope project-a] --> GI[Group Index<br/>scope 字段过滤]
+    GI --> RC[Relations 缓存<br/>relations_project-a.json]
+    RC --> KB_PATH[本地 KB<br/>kb/project-a/...]
+    RC --> MS[MCP memory_recall<br/>scope 参数传递]
+    KB_PATH --> TS_SCRIPT[TS 脚本<br/>--scope project-a]
+```
+
+---
+
+## 6. 模块/类设计
+
+### 6.1 模块清单
+
+| 模块 | 职责 | 依赖 |
+|------|------|------|
+| **GroupIndexManager** | Group 树的增删查：新建节点（需父节点）、读取整棵树、校验合法路径 | 无 |
+| **RelationCache** | Relations 缓存的读写、评分更新、最低分淘汰、关键词词云生成 | GroupIndexManager |
+| **KnowledgeBaseStore** | 本地 KB 的读取和写入：按 scope + Group 路径定位 index.json，读写 Markdown | 无 |
+| **RelationSyncEngine** | 记忆系统 → 本地 KB 同步：调用 MCP memory_recall 获取结果，写入本地 KB + 更新缓存 | KnowledgeBaseStore, RelationCache |
+| **QueryRouter** | 双路径路由：接收 Group + Relation，先查 RelationCache，命中走本地 KB，未命中走同步引擎 | RelationCache, RelationSyncEngine |
+| **SyncRelationScript** | 回写脚本：接收 AI 提供的 relation + 模块信息 + 关键词，校验关键词真实性，写入 Relation 缓存 + 本地 KB；支持批量 JSON 输入 | RelationCache, KnowledgeBaseStore |
+| **KnowledgeGapDetector** | 知识缺失检测：当本地 KB 和记忆系统均未命中时，触发知识补充流程（扫描→总结→写入） | 无 |
+| **KbImporter** | 外部知识库导入：扫描外部目录，按映射规则转换为 Group/Relation 结构，批量写入本地 KB + 记忆系统 | GroupIndexManager, SyncRelationScript |
+| **ScoreEngine** | 评分计算与淘汰：评分递增（每次命中 +1）、最低分查找、淘汰触发阈值判断 | 无 |
+
+### 6.2 关键模块设计要点
+
+- **GroupIndexManager**：
+  - 公开方法：`createNode(parentPath, nodeName)`, `createRoot(rootName)`, `getTree(scope)`, `validatePath(path)`
+  - 不暴露：树结构内部存储格式
+  - 设计取舍：支持多根节点（`roots` 对象），默认根节点为"项目根"，导入根节点由 `--root-name` 指定；单向树（只支持叶子→根查找），不支持任意图结构
+
+- **RelationCache**：
+  - 公开方法：`getRelations(scope, group)`, `addRelation(scope, group, relation, keywords, isImported)`, `generateWordCloud(scope, group, excludeIds)`
+  - 不暴露：评分算法的衰减细节（由 ScoreEngine 负责）
+  - 设计取舍：热门 Relation 数量上限可配置（默认 10），超出转为词云；导入的 Relation 标记 `isImported: true`，不生成关键词，不参与评分淘汰
+
+- **QueryRouter**：
+  - 公开方法：`route(scope, group, relation?)` → 返回 Markdown 文本
+  - 不暴露：内部是走快速路径还是检索路径
+  - 设计取舍：`route()` 内部自动决策，调用方无感知
+
+- **SyncRelationScript**：
+  - 公开方法：`sync(scope, group, relationText, moduleInfo, keywords)` → 写入缓存 + KB；`syncBatch(scope, items)` → 批量写入
+  - 关键词由 AI 从 moduleInfo 中提取并传入，脚本做两层校验：
+    1. 真实性校验：验证每个 keyword 在 moduleInfo 原文中存在，移除不存在的词
+    2. 代码符号校验：检测 keyword 是否包含路径/类名特征（`.`、`/`、文件扩展名等），移除并放入 invalid_keywords
+  - 设计取舍：关键词提取交给 AI（理解语义、更准确），脚本只做校验和写入，职责分离
+
+- **KnowledgeGapDetector**：
+  - 公开方法：`detect(localResult, memoryResult)` → 返回是否知识缺失
+  - 判定规则：本地 KB 返回 null 且 memory_recall 返回空结果，或 memory_recall 结果与查询意图明显不匹配
+  - 设计取舍：匹配度判断由 AI 自行决策，本模块仅提供辅助信息（如原始查询 vs 返回摘要的相似度提示）
+
+- **KbImporter**：
+  - 公开方法：`import(scope, sourceDir, rootName, mappingConfig)` → 扫描外部目录并批量写入
+  - 支持两种映射模式：
+    1. **约定模式**（零配置）：目录结构即 Group 树，文件名即 Relation，文件内容即模块信息
+    2. **配置模式**：通过映射配置文件（`import-mapping.json`）自定义目录→Group、文件→Relation 的映射规则
+  - 导入流程：创建导入根节点 → 扫描文件 → 解析映射 → 生成 Group 树 + Relations → 批量写入本地 KB → 可选写入记忆系统
+  - 关键约束：导入的知识不生成关键词（不在向量库中，关键词无检索价值）；导入根节点与自建根节点隔离
+  - 设计取舍：约定模式优先（零配置即可用），配置模式作为高级覆盖；导入为一次性操作，不做增量同步
+
+---
+
+## 7. 接口设计
+
+### 7.1 脚本接口总览
+
+| 脚本 | 语言 | 用途 |
+|------|------|------|
+| `scripts/query-group.mjs` | JS | 查询 Group：传入 Group 路径，返回热门 Relation + 关键词词云 |
+| `scripts/get-module-info.ts` | TS | 模块检索：传入 Relation，从本地 KB 读取 Markdown 文本 |
+| `scripts/sync-relation.ts` | TS | 关系回写：接收 AI 提供的 relation + 模块信息 + 关键词，校验关键词真实性，写入缓存 + 本地 KB；支持批量 JSON 输入 |
+| `scripts/import-kb.ts` | TS | 外部知识库导入：扫描外部目录，按映射规则转换为 Group/Relation 结构，批量写入本地 KB |
+| `scripts/manage-index.mjs` | JS | 索引管理：新建/删除 Group 节点 |
+
+### 7.2 query-group.mjs
+
+```
+用法: node scripts/query-group.mjs --scope <scope> [--groups <group1,group2>]
+
+输入:
+  --scope    项目隔离标识（必填）
+  --groups   逗号分隔的 Group 路径列表（可选，默认返回完整 Group 树）
+
+输出 (JSON):
+{
+  "roots": {
+    "项目根": {
+      "groups": [
+        {
+          "path": "监控/告警中心",
+          "hot_relations": [
+            { "id": "rel_001", "text": "告警规则CRUD流程", "score": 15 },
+            { "id": "rel_002", "text": "通知渠道配置", "score": 12 }
+          ],
+          "word_cloud": ["静默", "聚合", "升级", "值班表"]
+        }
+      ]
+    },
+    "wiki": {
+      "groups": [
+        {
+          "path": "监控/告警中心",
+          "hot_relations": [
+            { "id": "rel_101", "text": "告警规则CRUD流程", "score": 0 }
+          ],
+          "word_cloud": []
+        }
+      ]
+    }
+  }
+}
+```
+
+### 7.3 get-module-info.ts
+
+```
+用法: npx jiti scripts/get-module-info.ts --scope <scope> --group <group> --relation <relationId>
+
+输入:
+  --scope     项目隔离标识（必填）
+  --group     Group 路径（必填）
+  --relation  Relation ID 或名称（必填）
+
+输出 (stdout):
+  Markdown 纯文本（模块信息）
+
+异常:
+  - Relation 不存在 → 返回 null + 提示走检索路径
+  - 本地 KB 文件损坏 → 返回错误信息 + 建议从记忆系统同步
+```
+
+### 7.4 sync-relation.ts
+
+支持两种调用模式：**单条模式**（命令行参数）和**批量模式**（JSON 文件输入）。
+
+#### 单条模式
+
+```
+用法: npx jiti scripts/sync-relation.ts --scope <scope> --group <group>
+       --relation <relationText> --module-info <markdownContent>
+       --keywords <keyword1,keyword2,...>
+
+输入:
+  --scope        项目隔离标识（必填）
+  --group        Group 路径（必填）
+  --relation     Relation 描述文本，即语义检索命中的知识标题（必填）
+  --module-info  AI 对代码的理解总结，完整 Markdown 文本（必填）
+  --keywords     逗号分隔的关键词列表，由 AI 从 module-info 中提取（必填）
+                 关键词必须在 module-info 原文中真实存在，不可臆造
+                 关键词禁止使用代码符号（类名、方法名、路径、文件名等），
+                 仅使用自然语言词汇，避免代码信息带来的语义检索精度损失
+
+行为:
+  1. 校验 keywords 中的每个词是否在 module-info 原文中出现，移除不存在的词
+  2. 校验 keywords 中是否包含代码符号（含 `.`、`/`、`.ts`、`.js` 等路径或类名特征），移除并放入 invalid_keywords
+  3. 将 relation + keywords 写入 Relations 缓存（评分初始化为 1）
+  4. 如 hot_relations 达到上限，触发最低分淘汰 → 退化为关键词
+  5. 将 module-info 写入本地 KB 的 index.json
+
+输出 (JSON):
+{ "ok": true, "relation": "告警规则静默聚合", "keywords": ["静默", "聚合", "触发条件"], "invalid_keywords": ["AlertSilence"], "evicted": null }
+```
+
+#### 批量模式
+
+```
+用法: npx jiti scripts/sync-relation.ts --scope <scope> --input <jsonFile>
+
+输入:
+  --scope   项目隔离标识（必填）
+  --input   JSON 文件路径，包含批量写入数据（必填）
+
+JSON 文件格式:
+{
+  "items": [
+    {
+      "group": "监控/告警中心",
+      "relation": "告警规则CRUD流程",
+      "module_info": "# 告警规则CRUD\n\n## 调用链\n1. AlertController.create()...",
+      "keywords": ["CRUD", "规则", "阈值", "触发条件"]
+    },
+    {
+      "group": "监控/告警中心",
+      "relation": "通知渠道配置",
+      "module_info": "# 通知渠道配置\n\n## 架构\n通知模块采用策略模式...",
+      "keywords": ["Webhook", "邮件", "短信", "渠道"]
+    },
+    {
+      "group": "部署/前端",
+      "relation": "前端构建流程",
+      "module_info": "# 前端构建\n\n## 步骤\n1. npm run build...",
+      "keywords": ["webpack", "构建", "CDN"]
+    }
+  ]
+}
+
+行为:
+  对 items 中每条记录执行与单条模式相同的逻辑，统一写入后一次性持久化。
+  同一 Group 的多条 Relation 合并为一次文件写入，减少 I/O 开销。
+
+输出 (JSON):
+{
+  "ok": true,
+  "results": [
+    { "relation": "告警规则CRUD流程", "keywords": ["CRUD","规则","阈值","触发条件"], "invalid_keywords": [], "evicted": null },
+    { "relation": "通知渠道配置", "keywords": ["Webhook","邮件","短信","渠道"], "invalid_keywords": [], "evicted": "rel_003" }
+  ],
+  "total": 2,
+  "failed": 0
+}
+
+异常:
+  - module-info 为空 → 跳过该条，记录到 failed，不中断批量
+  - keywords 中有不存在于原文的词 → 移除该词，放入 invalid_keywords，仍继续写入
+  - keywords 中包含代码符号（含 `.`、`/`、`.ts` 等路径或类名特征）→ 移除该词，放入 invalid_keywords
+  - keywords 为空数组 → 写入 relation 但 keywords 为空，发出警告
+  - group 路径不存在 → 跳过该条，记录到 failed
+```
+
+### 7.5 import-kb.ts
+
+支持两种映射模式将外部知识库导入本地 KB。
+
+#### 约定模式（零配置）
+
+```
+用法: npx jiti scripts/import-kb.ts --scope <scope> --source <sourceDir>
+       --root-name <rootName> [--sync-memory]
+
+输入:
+  --source        外部知识库根目录路径（必填），目录结构即 Group 树
+  --scope         项目隔离标识（必填）
+  --root-name     导入根节点名称（必填），用于区分自建知识和导入知识
+                  例如 "wiki"、"docs"、"confluence"，不可与已有根节点重名
+  --sync-memory   是否同步写入记忆系统（可选，默认 false）
+
+约定规则:
+  - 导入根节点：在 Group 树中创建独立的根节点（由 --root-name 指定），与自建的"项目根"隔离
+  - 目录 → Group：子目录名即为 Group 节点名，嵌套目录即为子 Group
+  - 文件 → Relation：.md 文件名（去掉扩展名）即为 Relation 描述文本
+  - 文件内容 → 模块信息：.md 文件正文即为模块信息
+  - 不生成关键词：导入的知识不在向量库中，关键词无语义检索价值，因此不生成
+  - 非法文件（非 .md）跳过，不报错
+
+示例目录结构:
+  docs/
+  ├── 监控/
+  │   ├── 告警中心/
+  │   │   ├── 告警规则CRUD流程.md
+  │   │   └── 通知渠道配置.md
+  │   └── 日志查询.md
+  └── 部署/
+      ├── 前端.md
+      └── 后端.md
+
+导入结果:
+  导入根节点: wiki
+  Group 树: wiki/监控/告警中心, wiki/监控/日志查询, wiki/部署/前端, wiki/部署/后端
+  Relations: 告警规则CRUD流程, 通知渠道配置, 日志查询, 前端, 后端
+
+输出 (JSON):
+{
+  "ok": true,
+  "root_name": "wiki",
+  "groups_created": 4,
+  "relations_imported": 5,
+  "files_skipped": 2,
+  "errors": []
+}
+```
+
+#### 配置模式
+
+```
+用法: npx jiti scripts/import-kb.ts --scope <scope> --source <sourceDir>
+       --mapping <mappingFile> --root-name <rootName> [--sync-memory]
+
+输入:
+  --source        外部知识库根目录路径（必填）
+  --scope         项目隔离标识（必填）
+  --mapping       映射配置文件路径（必填，JSON 格式）
+  --root-name     导入根节点名称（必填），用于区分自建知识和导入知识
+  --sync-memory   是否同步写入记忆系统（可选，默认 false）
+
+映射配置文件格式 (import-mapping.json):
+{
+  "root_name": "wiki",
+  "groups": [
+    {
+      "path": "监控/告警中心",
+      "sources": [
+        {
+          "file": "alerts/crud-guide.md",
+          "relation": "告警规则CRUD流程",
+          "code_refs": ["src/controllers/alert.ts: AlertController", "src/services/alert.ts: AlertService.validate"]
+        },
+        {
+          "file": "alerts/notification.md",
+          "relation": "通知渠道配置",
+          "code_refs": ["src/services/notification.ts: ChannelFactory"]
+        }
+      ]
+    },
+    {
+      "path": "部署",
+      "sources": [
+        {
+          "file": "deploy/frontend-deploy.md",
+          "relation": "前端部署流程",
+          "code_refs": ["scripts/deploy-fe.sh"]
+        },
+        {
+          "file": "deploy/backend-deploy.md",
+          "relation": "后端部署流程",
+          "code_refs": ["Dockerfile", "k8s/backend.yaml"]
+        }
+      ]
+    }
+  ]
+}
+
+配置规则:
+  - root_name: 导入根节点名称，覆盖命令行 --root-name（可选，优先级更高）
+  - groups[].path: 目标 Group 路径（相对于导入根节点），不存在则自动创建
+  - groups[].sources[].file: 相对于 --source 的文件路径
+  - groups[].sources[].relation: 导入后的 Relation 描述文本
+  - groups[].sources[].code_refs: 可选，代码定位符列表，格式见 8.5 节
+  - 不生成关键词：导入的知识不在向量库中，关键词无语义检索价值
+  - 同一文件可映射到不同 Group 下的不同 Relation
+
+输出 (JSON):
+{
+  "ok": true,
+  "root_name": "wiki",
+  "groups_created": 2,
+  "relations_imported": 4,
+  "files_skipped": 0,
+  "errors": []
+}
+
+异常:
+  - --source 目录不存在 → 报错退出
+  - --root-name 与已有根节点重名 → 报错退出，提示"根节点已存在，请使用不同名称"
+  - 映射文件中引用的文件不存在 → 跳过该条，记入 errors
+  - .md 文件内容为空 → 跳过该条，记入 errors
+  - 映射文件 JSON 格式错误 → 报错退出
+```
+
+### 7.6 manage-index.mjs
+
+```
+用法: node scripts/manage-index.mjs --scope <scope> [--action create|delete|create-root]
+       [--parent <parentPath>] [--name <nodeName>] [--root-name <rootName>]
+
+输入:
+  --scope      项目隔离标识（必填）
+  --action     操作：create（默认）| delete | create-root
+  --parent     父节点路径（create/delete 时必填，含根节点前缀如"项目根/监控"）
+  --name       新节点名称（create 时必填）
+  --root-name  新根节点名称（create-root 时必填，不可与已有根节点重名）
+
+输出 (JSON):
+{ "ok": true, "path": "监控/告警中心" }
+
+约束:
+  - 默认根节点"项目根"不可删除
+  - 删除非空节点需二次确认
+  - create-root 创建新的根节点，用于手动创建导入根节点（import-kb.ts 会自动调用）
+```
+
+---
+
+## 8. 数据模型
+
+### 8.1 Group 树索引 JSON
+
+文件路径：`kb/{scope}/group-index.json`
+
+```json
+{
+  "scope": "project-a",
+  "roots": {
+    "项目根": {
+      "部署": {
+        "前端": {},
+        "后端": {},
+        "启动脚本": {}
+      },
+      "监控": {
+        "告警中心": {},
+        "日志查询": {},
+        "APM查询": {},
+        "告警组": {}
+      }
+    },
+    "wiki": {
+      "监控": {
+        "告警中心": {
+          "告警规则CRUD流程": {},
+          "通知渠道配置": {}
+        }
+      },
+      "部署": {
+        "前端": {},
+        "后端": {}
+      }
+    }
+  },
+  "updatedAt": "2026-05-22T10:00:00Z"
+}
+```
+
+**设计要点**：
+- 支持多个根节点（`roots` 对象），每个根节点下独立一棵子树
+- 自建知识的默认根节点为"项目根"，导入知识的根节点由 `--root-name` 指定（如"wiki"）
+- 仅存 key（节点名），value 为空对象 `{}`（叶子）或嵌套对象（分支）
+- 完整树可一次性塞入 LLM context
+- 树深度建议 ≤ 4 层，避免过度嵌套
+
+### 8.2 Relations 缓存 JSON
+
+文件路径：`kb/{scope}/relations-cache.json`
+
+```json
+{
+  "scope": "project-a",
+  "groups": {
+    "项目根/监控/告警中心": {
+      "hot_relations": [
+        {
+          "id": "rel_001",
+          "text": "告警规则CRUD流程",
+          "score": 15,
+          "keywords": ["规则", "阈值", "触发条件"],
+          "isImported": false
+        },
+        {
+          "id": "rel_002",
+          "text": "通知渠道配置",
+          "score": 12,
+          "keywords": ["邮件", "短信", "渠道"],
+          "isImported": false
+        }
+      ],
+      "word_cloud_keywords": ["静默", "聚合", "升级", "值班表", "分级"],
+      "max_hot_count": 10
+    },
+    "wiki/监控/告警中心": {
+      "hot_relations": [
+        {
+          "id": "rel_101",
+          "text": "告警规则CRUD流程",
+          "score": 0,
+          "keywords": [],
+          "isImported": true
+        }
+      ],
+      "word_cloud_keywords": [],
+      "max_hot_count": 10
+    }
+  },
+  "updatedAt": "2026-05-22T10:00:00Z"
+}
+```
+
+**设计要点**：
+- Group 路径含根节点前缀（如"项目根/监控/告警中心"、"wiki/监控/告警中心"），确保不同根节点下的同名 Group 不冲突
+- `hot_relations` 按 score 降序排列
+- 当 `hot_relations` 达到 `max_hot_count` 上限且有新 Relation 加入时：
+  1. 淘汰 score 最低的 Relation 到回收区
+  2. 从回收 Relation 中提取 keywords 合并到 `word_cloud_keywords`
+- `word_cloud_keywords` 自动去重
+- `max_hot_count` 可配置（默认 10）
+- `isImported: true` 的 Relation：keywords 为空、score 为 0、不参与评分淘汰
+
+### 8.3 本地 KB 目录结构
+
+```
+kb/
+├── project-a/
+│   ├── group-index.json          # Group 树索引
+│   ├── relations-cache.json      # Relations 缓存
+│   ├── 部署/
+│   │   └── index.json            # Relation → Markdown 映射
+│   ├── 监控/
+│   │   └── index.json
+│   └── ...
+├── project-b/
+│   ├── group-index.json
+│   ├── relations-cache.json
+│   └── ...
+└── _template/                    # 新 scope 初始化模板
+    ├── group-index.json
+    └── relations-cache.json
+```
+
+**本地 KB index.json** 格式：
+
+```json
+{
+  "告警规则CRUD流程": "# 告警规则CRUD\n\n## 调用链\n1. AlertController.create() → AlertService.validate()\n2. AlertService.create() → AlertRepository.insert()\n3. AlertRepository 写入 MongoDB alerts 集合\n\n## 关键模块\n- **AlertController**: src/controllers/alert.ts: AlertController\n- **AlertService**: src/services/alert.ts: AlertService.validate",
+  "通知渠道配置": "# 通知渠道配置\n\n## 架构\n通知模块采用策略模式：\n- ChannelFactory 根据 type 创建对应 Channel\n- WebhookChannel: HTTP POST 回调\n- EmailChannel: SMTP 发送\n- SMSChannel: 短信网关 API\n\n## 配置\n- 渠道配置存储在 config/notification.yml\n\n## 代码定位\n- src/services/notification.ts: ChannelFactory\n- src/channels/webhook.ts: WebhookChannel.send"
+}
+```
+
+### 8.5 代码定位符（code_refs）格式
+
+代码定位符用于在模块信息中精确标注源码位置，帮助 AI 快速定位到关键代码，而非仅依赖文字描述。
+
+**格式规范**：
+
+```
+<相对路径>[: <类名>[.<方法名>]]
+```
+
+**示例**：
+
+| 代码定位符 | 含义 |
+|-----------|------|
+| `src/controllers/alert.ts` | 定位到文件 |
+| `src/controllers/alert.ts: AlertController` | 定位到文件中的关键类 |
+| `src/services/alert.ts: AlertService.validate` | 定位到类中的关键方法 |
+| `scripts/deploy-fe.sh` | 定位到脚本文件 |
+| `config/notification.yml` | 定位到配置文件 |
+| `k8s/backend.yaml` | 定位到部署配置 |
+
+**使用规则**：
+- **路径必须是相对路径**，相对于项目根目录，不以 `/` 开头
+- **类名和方法名可选**，仅在需要精确定位时添加
+- **推荐在模块信息中附上代码定位符**，大多数时候代码比总结更到位
+- **关键词中禁止使用代码符号**（类名、方法名、路径等），避免路径信息带来的语义检索精度损失
+- 代码定位符写在 Markdown 正文中（如 `## 关键模块` 章节），而非单独字段
+
+**在 Markdown 中的推荐写法**：
+
+```markdown
+## 关键模块
+- **AlertController**: src/controllers/alert.ts: AlertController
+- **AlertService**: src/services/alert.ts: AlertService.validate
+- **AlertRepository**: src/repositories/alert.ts: AlertRepository.insert
+
+## 部署脚本
+- scripts/deploy-fe.sh
+- Dockerfile
+```
+
+### 8.4 约束
+
+- Group 名称：中文/英文均可，同一层级不可重名
+- Relation ID：自动生成（格式 `rel_{自增序号}`），不可手动指定
+- 本地 KB Markdown 正文：无长度限制，建议每段 ≤ 2000 字
+- 评分范围：0 ~ N，无上限，不使用衰减
+- 代码定位符：必须为相对路径，可选附加类名/方法名（格式：`path: Class.method`）
+- 关键词规则：禁止使用代码符号（类名、方法名、路径、文件名等），仅使用自然语言词汇，避免代码信息带来的语义检索精度损失
+- 导入知识：不生成关键词（因不在向量库中，关键词无检索价值）；不参与缓存评分和淘汰逻辑
+
+---
+
+## 9. 关键流程时序图
+
+### 9.1 快速路径（Relation 命中）
+
+```mermaid
+sequenceDiagram
+    participant AI as AI 智能体
+    participant QG as query-group.mjs
+    participant RC as RelationCache
+    participant TS as get-module-info.ts
+    participant KB as 本地 KB (JSON)
+
+    AI->>QG: query-group --scope project-a --groups 监控/告警中心
+    QG->>RC: getRelations(project-a, 监控/告警中心)
+    RC-->>QG: hot_relations + word_cloud
+    QG-->>AI: { hot_relations: [...], word_cloud: [...] }
+
+    Note over AI: AI 从 hot_relations 选择 "告警规则CRUD流程"
+
+    AI->>TS: get-module-info --scope project-a --relation rel_001
+    TS->>KB: 读取 kb/project-a/监控/告警中心/index.json
+    KB-->>TS: Markdown 文本
+    TS-->>AI: "# 告警规则CRUD\n\n## 调用链..."
+
+    Note over RC: 更新评分: rel_001.score += 1
+```
+
+### 9.2 检索路径（Relation 未命中 → 语义检索 → 回写）
+
+```mermaid
+sequenceDiagram
+    participant AI as AI 智能体
+    participant QG as query-group.mjs
+    participant RC as RelationCache
+    participant MCP as memory_recall (MCP)
+    participant MS as 记忆系统
+    participant SR as sync-relation.ts
+    participant SE as ScoreEngine
+    participant KB as 本地 KB (JSON)
+
+    AI->>QG: query-group --scope project-a --groups 监控/告警中心
+    QG-->>AI: { hot_relations: [...], word_cloud: ["静默","聚合",...] }
+
+    Note over AI: 未找到需要的 Relation<br/>AI 用关键词组装: "告警规则 静默 聚合"
+
+    AI->>MCP: memory_recall(query="告警规则 静默 聚合", scope="project-a")
+    MCP->>MS: 语义检索
+    MS-->>MCP: 返回匹配的模块信息（Markdown）
+    MCP-->>AI: Markdown 结果
+
+    Note over AI,SR: AI 从检索结果中提取关键词，调用回写脚本
+
+    AI->>SR: sync-relation --scope project-a --group 监控/告警中心<br/>--relation "告警规则静默聚合"<br/>--module-info "## 调用链\nAlertController..."<br/>--keywords "静默,聚合,AlertSilence"
+    SR->>SR: 校验 keywords 是否在 module-info 原文中出现<br/>移除不存在的词
+    SR->>RC: addRelation + keywords
+    RC->>SE: 检查 hot_relations 是否达到上限
+    SE-->>RC: 已达上限，淘汰最低分 Relation
+    RC->>RC: 淘汰 Relation 退化为 keywords 加入 word_cloud
+    RC->>KB: 写入 kb/project-a/监控/告警中心/index.json
+    KB-->>SR: ok
+    SR-->>AI: { ok: true, relation: "...", keywords: [...], evicted: null }
+```
+
+### 9.3 知识缺失路径（本地 KB + 记忆系统均未命中 → 扫描补充）
+
+当 AI 在本地 KB 和记忆系统中均未检索到期望的知识，或检索结果与需求不匹配时，说明该知识尚未被索引。AI 应主动暂停并请求用户协助补充。
+
+```mermaid
+sequenceDiagram
+    participant AI as AI 智能体
+    participant USER as 用户
+    participant SCAN as 代码扫描 & 总结
+    participant SR as sync-relation.ts
+    participant MI as manage-index.mjs
+    participant MCP as memory_store (MCP)
+    participant KB as 本地 KB (JSON)
+
+    Note over AI: 本地 KB 未命中 → 语义检索也未命中<br/>或检索结果不匹配需求
+
+    AI->>USER: ⚠️ 知识缺失：未找到 "XXX" 相关知识<br/>请提供以下信息帮助补充：<br/>1. 涉及的代码目录/文件<br/>2. 关注的调用链或模块<br/>3. 业务上下文描述
+
+    USER-->>AI: 提供提示和上下文（目录路径、关键文件、业务说明等）
+
+    Note over AI,SCAN: AI 根据用户提示进行原始扫描和总结
+
+    AI->>SCAN: 扫描用户指定的代码目录/文件<br/>阅读源码、调用链、配置等
+    SCAN-->>AI: 原始代码上下文
+
+    Note over AI: AI 将原始上下文总结为结构化知识<br/>可同时生成多个不同方向/类型的 Relation
+
+    AI->>MI: manage-index --scope project-a --action create<br/>--parent 监控 --name 告警静默
+    MI-->>AI: { ok: true, path: "监控/告警静默" }
+
+    Note over AI: AI 将扫描结果总结为多个 Relation<br/>每个 Relation 包含 relation + module_info + keywords<br/>写入临时 JSON 文件，调用批量模式一次性写入
+
+    AI->>SR: sync-relation --scope project-a --input /tmp/batch.json<br/>{ items: [{ group, relation, module_info, keywords }, ...] }
+    SR-->>AI: { ok: true, results: [...], total: 3, failed: 0 }
+
+    loop 每个 Relation（并行）
+        AI->>MCP: memory_store(content="告警静默规则引擎...",<br/>scope="project-a", tags=["监控","告警静默"])
+        MCP-->>AI: { ok: true, memory_id: "mem_xxx" }
+    end
+
+    Note over AI,KB: 知识补充完成<br/>本地 KB + 记忆系统均已写入
+```
+
+**关键规则**：
+- **必须暂停请求用户**：AI 不可自行猜测或跳过缺失知识，必须明确告知用户知识缺口并请求协助
+- **用户提示是扫描起点**：AI 根据用户提供的目录、文件、上下文进行定向扫描，而非全项目无差别扫描
+- **一次扫描多处总结**：一次扫描可产出多个不同方向/类型/Group 的 Relation，避免重复扫描
+- **双写保证一致**：本地 KB 和记忆系统必须同时写入，保持数据源一致
+- **Group 按需创建**：如果目标 Group 不存在，AI 先调用 `manage-index.mjs` 创建，再写入 Relation
+
+### 9.4 外部知识库导入路径（项目已有文档 → 批量导入）
+
+当项目已有文件系统形式的知识库（如 `docs/` 目录下的 Markdown 文件集合），可通过 `import-kb.ts` 一次性导入，无需从零构建本地 KB。
+
+#### 约定模式导入
+
+```mermaid
+sequenceDiagram
+    participant USER as 用户
+    participant AI as AI 智能体
+    participant IMP as import-kb.ts
+    participant GIM as GroupIndexManager
+    participant SR as sync-relation.ts
+    participant MCP as memory_store (MCP)
+    participant KB as 本地 KB (JSON)
+
+    USER->>AI: 项目已有 docs/ 目录，希望导入知识库
+
+    Note over AI: AI 检查 docs/ 目录结构<br/>确认符合约定（目录=Group，.md=Relation）<br/>与用户协商导入根节点名称
+
+    AI->>IMP: import-kb --scope project-a --source ./docs --root-name wiki
+    IMP->>IMP: 递归扫描 ./docs 目录<br/>收集 .md 文件和目录结构
+    IMP->>GIM: 创建导入根节点 "wiki"<br/>批量创建子 Group 节点（目录→Group）
+    GIM-->>IMP: ok
+
+    loop 每个 .md 文件
+        IMP->>IMP: 文件名→Relation 描述<br/>文件内容→模块信息<br/>不生成关键词
+        IMP->>KB: 写入 kb/project-a/wiki/{Group}/index.json
+    end
+
+    IMP-->>AI: { ok: true, root_name: "wiki", groups_created: 4, relations_imported: 5, ... }
+
+    opt --sync-memory 启用
+        loop 每个 Relation
+            AI->>SR: sync-relation --scope project-a --input /tmp/import-batch.json
+            SR-->>AI: ok
+            AI->>MCP: memory_store(content=..., scope="project-a")
+            MCP-->>AI: ok
+        end
+    end
+
+    Note over AI,KB: 导入完成<br/>本地 KB 已就绪（wiki 根节点隔离），可选同步至记忆系统
+```
+
+#### 配置模式导入
+
+```mermaid
+sequenceDiagram
+    participant USER as 用户
+    participant AI as AI 智能体
+    participant IMP as import-kb.ts
+    participant GIM as GroupIndexManager
+    participant SR as sync-relation.ts
+    participant MCP as memory_store (MCP)
+    participant KB as 本地 KB (JSON)
+
+    USER->>AI: 项目文档结构不规整，需要自定义映射
+
+    Note over AI: AI 分析 docs/ 目录结构<br/>与用户沟通映射策略和导入根节点名称<br/>生成 import-mapping.json
+
+    AI->>USER: 建议映射方案（根节点: wiki）：<br/>docs/alerts/crud.md → wiki/监控/告警中心/告警规则CRUD<br/>docs/deploy/fe.md → wiki/部署/前端部署流程<br/>确认后生成配置文件
+
+    USER-->>AI: 确认映射方案
+
+    AI->>IMP: import-kb --scope project-a --source ./docs<br/>--mapping ./import-mapping.json --root-name wiki --sync-memory
+    IMP->>IMP: 读取映射配置<br/>创建导入根节点 "wiki"<br/>按 groups 逐条处理
+    IMP->>GIM: 创建映射中指定的 Group 路径（在 wiki 根节点下）
+    GIM-->>IMP: ok
+
+    loop 每条映射
+        IMP->>IMP: 读取源文件 → 提取内容<br/>使用映射中的 relation 和 code_refs<br/>不生成关键词
+        IMP->>KB: 写入 kb/project-a/wiki/{Group}/index.json
+    end
+
+    IMP-->>AI: { ok: true, root_name: "wiki", groups_created: 2, relations_imported: 4, ... }
+
+    IMP->>SR: 内部调用 syncBatch 写入缓存（keywords 为空）
+    SR-->>IMP: ok
+
+    loop 每个 Relation
+        AI->>MCP: memory_store(content=..., scope="project-a")
+        MCP-->>AI: ok
+    end
+```
+
+**关键规则**：
+- **根节点隔离**：导入的外部知识库必须在独立的根节点下（如"wiki"），与自建知识的"项目根"严格隔离，避免两类知识混合
+- **不生成关键词**：导入的知识不在向量库中，关键词无语义检索价值，因此导入时不生成关键词
+- **约定优先**：如果外部知识库目录结构清晰（目录=领域，文件=主题），直接用约定模式零配置导入
+- **配置兜底**：目录结构不规整或需要重命名时，由 AI 与用户协商生成映射配置，再执行配置模式导入
+- **幂等安全**：重复导入同一目录不会产生重复 Relation，已存在的 Relation 会被覆盖更新
+- **记忆系统可选同步**：`--sync-memory` 控制是否同时写入记忆系统，导入阶段可先只写本地 KB，后续按需同步
+
+---
+
+## 10. 异常处理 & 边界情况
+
+| 场景 | 行为 | 是否对外暴露 |
+|------|------|-------------|
+| `--scope` 未指定 | 抛出错误，提示"必须通过 --scope 指定项目 scope" | 是 |
+| Group 路径不存在 | 返回空 `hot_relations` + 空 `word_cloud`；不崩溃 | 是 |
+| Relation ID 在本地 KB 中不存在 | 返回 null + 提示"请在记忆系统中通过关键词检索" | 是 |
+| 本地 KB JSON 损坏/格式错误 | 返回错误信息 + 损坏文件路径；建议"从记忆系统同步恢复" | 是 |
+| Relations 缓存 JSON 损坏 | 降级：跳过缓存层，所有查询直接走检索路径；下次写入覆盖损坏文件 | 否（自动恢复） |
+| 记忆系统不可用（MCP 超时/错误） | 返回"记忆系统不可用，请稍后重试"；不写入损坏数据 | 是 |
+| 并发写入 Relations 缓存 | 以最后写为准（文件级覆盖），无锁机制 | 否 |
+| 新 scope 首次使用 | 从 `_template/` 复制初始化文件；自动创建目录 | 否（自动初始化） |
+| 淘汰 Relation 时无 keywords 可提取 | 丢弃该 Relation，不生成关键词 | 否 |
+| 本地 KB + 记忆系统均未命中 | AI 暂停并提示用户知识缺失，请求提供目录/文件/上下文线索，然后进行定向扫描和总结 | 是 |
+| 记忆系统检索结果与需求不匹配 | 视同未命中，AI 暂停并提示用户补充知识 | 是 |
+| sync-relation 传入空 module-info | 报错拒绝写入，提示"模块信息不能为空" | 是 |
+| sync-relation keywords 中有不存在于原文的词 | 移除该词，放入 invalid_keywords 返回，仍继续写入 | 是（警告） |
+| sync-relation keywords 为空数组 | 写入 relation 但 keywords 为空，发出警告 | 是（警告） |
+| sync-relation 批量模式中某条 group 不存在 | 跳过该条，记录到 failed，不中断其余条目 | 是 |
+| import-kb --source 目录不存在 | 报错退出，提示"源目录路径不存在" | 是 |
+| import-kb --root-name 与已有根节点重名 | 报错退出，提示"根节点已存在，请使用不同名称" | 是 |
+| import-kb 映射文件中引用的文件不存在 | 跳过该条，记入 errors，继续处理其余 | 是 |
+| import-kb .md 文件内容为空 | 跳过该条，记入 errors | 是 |
+| import-kb 重复导入同一目录 | 幂等：已存在的 Relation 覆盖更新，不产生重复 | 否 |
+
+---
+
+## 11. 性能 & 安全考虑
+
+### 11.1 性能
+
+- **预期延迟**：
+  - Group 树索引读取：<5ms（单 JSON 文件读取 + 解析）
+  - 快速路径：<10ms（两次文件读取：缓存 + KB）
+  - 检索路径：依赖 memory_recall 响应时间（通常 500ms~2s）
+- **关键瓶颈点**：Relations 缓存 JSON 文件随 Relation 增长而变大，需要定期压缩（见 11.1 不做的优化）
+- **不做的优化**：
+  - 不做内存缓存（每次读取文件，保持简单一致）
+  - 不做文件拆分（单 scope 单文件，避免碎片化）
+  - 不做批量 I/O（每次操作独立，保证一致性优先于性能）
+
+### 11.2 安全
+
+- **输入校验**：`--scope` 参数做白名单格式校验（仅允许字母、数字、连字符、下划线），拒绝路径遍历字符（`../`）
+- **权限边界**：本地 JSON 文件权限依赖操作系统，无额外 ACL 层
+- **scope 作为安全边界**：不同 scope 之间通过文件系统路径物理隔离，脚本不提供跨 scope 查询能力
+- **敏感信息处理**：模块信息中不应存储密钥、Token 等敏感数据（由开发者自行保障）
+
+---
+
+## 12. 测试方案
+
+| 类型 | 范围 | 工具 |
+|------|------|------|
+| 单元测试 | ScoreEngine 评分递增/最低分查找；RelationCache 淘汰逻辑（达到上限时正确淘汰最低分+提取关键词） | Node.js test runner |
+| 单元测试 | GroupIndexManager 树操作（创建/删除/校验路径） | Node.js test runner |
+| 集成测试 | query-group.mjs → get-module-info.ts 端到端快速路径 | Node.js test runner + 临时本地 KB |
+| 集成测试 | 检索路径全链路：关键词组装 → MCP memory_recall → sync-relation.ts 回写缓存 | 需 MCP 服务可用 |
+| 集成测试 | 知识缺失路径：本地 KB + 记忆系统均未命中 → AI 提示用户 → 扫描总结 → 双写 | 需 MCP 服务可用 |
+| 集成测试 | 外部知识库导入（约定模式）：临时 docs/ 目录 → import-kb → 验证 Group 树 + Relations + KB 内容 | Node.js test runner + 临时目录 |
+| 集成测试 | 外部知识库导入（配置模式）：映射文件 → import-kb → 验证自定义映射正确性 | Node.js test runner + 临时目录 |
+| 边界测试 | import-kb 重复导入幂等性；空 .md 文件跳过；映射文件引用不存在文件跳过 | Node.js test runner |
+| 边界测试 | scope 未指定报错；损坏 JSON 降级；空 Group 返回空列表；并发写入无崩溃 | Node.js test runner |
+| 隔离测试 | 验证 scope-a 查询不到 scope-b 的 Relation 和 KB | Node.js test runner |
+
+不在测试范围内：
+
+- 记忆系统内部检索正确性（属于 memory-lancedb-pro 自身测试范围）
+- MCP 协议传输正确性（属于 mcp-wrapper 测试范围）
+
+---
+
+## 13. 实施计划 / 里程碑
+
+| 批次 | 主题 | 主要产出 | 依赖 |
+|------|------|---------|------|
+| Batch 1 | 数据模型与本地KB | `scripts/manage-index.mjs`、Group 树 JSON Schema、Relations 缓存 JSON Schema、本地 KB 目录模板、`_template/` 初始化文件 | 无 |
+| Batch 2 | 核心脚本 | `scripts/query-group.mjs`（查询+词云生成）、`scripts/get-module-info.ts`（本地KB读取）、`scripts/sync-relation.ts`（回写+关键词校验）、ScoreEngine + RelationCache 淘汰逻辑 | Batch 1 |
+| Batch 3 | 导入与集成 | `scripts/import-kb.ts`（约定模式+配置模式）、`skills/knowledge-index/SKILL.md`（AI 指令文件，含知识缺失流程+导入流程指引）、端到端测试（快速路径+检索路径+知识缺失路径+导入路径）、文档完善 | Batch 1, 2 |
+
+---
+
+## 14. 风险 & 待定问题
+
+### 14.1 已知风险
+
+| 风险 | 影响 | 预案 |
+|------|------|------|
+| 本地 KB 与记忆系统内容不一致 | AI 获取到过期模块信息 | 设计"过期标记"字段 + 定期同步脚本；初期靠人工触发同步 |
+| Relations 缓存 JSON 持续膨胀 | 文件过大导致读取变慢 | 设置 `max_hot_count` 上限 + 冷数据→词云降级；必要时拆分文件 |
+| 淘汰后 Relation 退化为关键词，AI 再次检索时可能构造出低质量查询 | 检索命中率下降 | 关键词保留上限（默认 50 个），超量时淘汰最低频关键词 |
+| 并发场景下文件覆盖导致数据丢失 | 评分、缓存更新丢失 | 初期接受最后写入胜出；高并发场景后续考虑文件锁 |
+
+### 14.2 待定问题（Open Questions）
+
+- [ ] 是否需要在 Relations 缓存中加入"上次同步时间"字段，用于判断本地 KB 是否过期？
+- [ ] 淘汰后的 Relation 是否需要保留到 `relations-archive.json`（历史记录），还是直接丢失？
+- [ ] Group 树的生成是否可以结合代码静态分析工具（如 madge）部分自动化？
+- [ ] 关键词是否需要评分/频次？当前设计无关键词衰减，词云只会增大不会缩小
+- [ ] **[待讨论]** 是否需要 `scripts/batch-vectorize.ts` 批量向量化脚本？外部知识库内容量大时，逐条调用 MCP `memory_store` 效率低。需要先确认：本记忆系统本地存储的向量知识量级上限是多少？是否支持 CLI 批量灌入？
