@@ -11,7 +11,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { createMemoryRuntime, type MemoryRuntime, type RuntimeOptions } from "./index.js";
+import { createMemoryRuntime, buildServerName, type MemoryRuntime, type RuntimeOptions } from "./index.js";
 import { extractInputSchema } from "./schema.js";
 import {
   triggerAutoRecall,
@@ -41,7 +41,8 @@ export interface McpServerOptions extends RuntimeOptions {
  * 3. Connects via stdio and starts listening
  */
 export async function startMcpServer(options: McpServerOptions = {}): Promise<void> {
-  const serverName = options.serverName ?? "memory-lancedb-mcp";
+  const baseServerName = options.serverName ?? "memory-lancedb-mcp";
+  const serverName = buildServerName(baseServerName, options.scope);
   const serverVersion = options.serverVersion ?? "0.1.0";
 
   // 1. Initialize runtime
@@ -76,6 +77,12 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
   });
 
   // 4. Handle tools/call
+  // When a server-level scope is active, agentId is set to the scope value so that
+  // all tool calls are automatically isolated to that scope.
+  // When no scope is set, agentId is "system" — a reserved bypass id in the scope
+  // manager that exposes all scopes (cross-scope mode).
+  const defaultAgentId = options.scope ?? "system";
+
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
@@ -89,7 +96,7 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
       const result = await runtime.callTool(
         name,
         (args || {}) as Record<string, unknown>,
-        { agentId: "main" },
+        { agentId: defaultAgentId },
       );
 
       // Map to MCP response format
@@ -122,6 +129,13 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
 
   // Log to stderr (not stdout — that's for MCP protocol)
   console.error(`[mem] MCP Server started (stdio mode)`);
+  if (!options.scope) {
+    console.error(
+      `[mem] WARNING: started without --scope; running in cross-scope mode ` +
+      `(agentId="system"). All scopes — including other agents' private memories ` +
+      `— are visible. Pass --scope <name> to restrict to a single project.`,
+    );
+  }
   console.error(`[mem] Tools available: ${runtime.listTools().map(t => t.name).join(", ")}`);
 }
 

@@ -13,7 +13,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { createMemoryRuntime, type MemoryRuntime, type RuntimeOptions } from "./index.js";
+import { createMemoryRuntime, buildServerName, type MemoryRuntime, type RuntimeOptions } from "./index.js";
 import {
   triggerAutoRecall,
   triggerAutoCapture,
@@ -57,7 +57,8 @@ export interface SseServerOptions extends RuntimeOptions {
 export async function startSseServer(options: SseServerOptions = {}): Promise<void> {
   const port = options.port ?? 3100;
   const host = options.host ?? "127.0.0.1";
-  const serverName = options.serverName ?? "memory-lancedb-mcp";
+  const baseServerName = options.serverName ?? "memory-lancedb-mcp";
+  const serverName = buildServerName(baseServerName, options.scope);
   const serverVersion = options.serverVersion ?? "0.1.0";
 
   // 1. Initialize runtime
@@ -67,7 +68,12 @@ export async function startSseServer(options: SseServerOptions = {}): Promise<vo
   });
 
   // 2. Build JSON-RPC handler map
-  const handlers = buildJsonRpcHandlers(runtime, serverName, serverVersion);
+  // When a server-level scope is active, agentId is set to the scope value so that
+  // all tool calls are automatically isolated to that scope.
+  // When no scope is set, agentId is set to "system" to enable cross-scope bypass
+  // (the scope manager treats "system" agentId as full bypass).
+  const defaultAgentId = options.scope ?? "system";
+  const handlers = buildJsonRpcHandlers(runtime, serverName, serverVersion, defaultAgentId);
 
   // 3. Track SSE clients
   const clients = new Set<ServerResponse>();
@@ -167,6 +173,15 @@ export async function startSseServer(options: SseServerOptions = {}): Promise<vo
 
   httpServer.listen(port, host, () => {
     console.log(`[mem] MCP Server started (SSE mode)`);
+    if (!options.scope) {
+      console.warn(
+        `[mem] WARNING: started without --scope; running in cross-scope mode ` +
+        `(agentId="system"). All scopes — including other agents' private memories ` +
+        `— are visible to any client that can reach this endpoint. ` +
+        `Pass --scope <name> to restrict to a single project, and ensure the ` +
+        `host (${host}) is not exposed to untrusted networks.`,
+      );
+    }
     console.log(`[mem] Listening: http://${host}:${port}`);
     console.log(`[mem] SSE endpoint: http://${host}:${port}/sse`);
     console.log(`[mem] Message endpoint: http://${host}:${port}/message`);
@@ -217,6 +232,7 @@ function buildJsonRpcHandlers(
   runtime: MemoryRuntime,
   serverName: string,
   serverVersion: string,
+  defaultAgentId: string,
 ): Map<string, HandlerFn> {
   const handlers = new Map<string, HandlerFn>();
 
@@ -254,7 +270,7 @@ function buildJsonRpcHandlers(
 
     // Regular tool call
     try {
-      const result = await runtime.callTool(name, args, { agentId: "main" });
+      const result = await runtime.callTool(name, args, { agentId: defaultAgentId });
       if (result && Array.isArray(result.content)) {
         return {
           content: result.content.map(item => ({

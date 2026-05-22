@@ -202,7 +202,7 @@ program
         const params: Record<string, unknown> = { query: prefix, limit };
         if (opts.scope) params.scope = opts.scope;
         if (opts.category) params.category = opts.category;
-        const result = await runtime.callTool("memory_recall", params);
+        const result = await runtime.callTool("memory_recall", params, { agentId: "system" });
         if (opts.json) {
           console.log(JSON.stringify(result, null, 2));
         } else {
@@ -217,7 +217,7 @@ program
       if (opts.scope) params.scope = opts.scope;
       if (opts.category) params.category = opts.category;
 
-      const result = await runtime.callTool("memory_list", params);
+      const result = await runtime.callTool("memory_list", params, { agentId: "system" });
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
       } else {
@@ -258,7 +258,7 @@ program
       if (opts.scope) params.scope = opts.scope;
       if (opts.tags) params.tags = opts.tags;
 
-      const result = await runtime.callTool("memory_recall", params);
+      const result = await runtime.callTool("memory_recall", params, { agentId: "system" });
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
       } else {
@@ -288,7 +288,7 @@ program
       const params: Record<string, unknown> = {};
       if (opts.scope) params.scope = opts.scope;
 
-      const result = await runtime.callTool("memory_stats", params);
+      const result = await runtime.callTool("memory_stats", params, { agentId: "system" });
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
       } else {
@@ -330,7 +330,9 @@ program
       if (opts.tags) params.tags = opts.tags;
       if (opts.scope) params.scope = opts.scope;
 
-      const result = await runtime.callTool("memory_store", params);
+      // CLI runs in cross-scope mode: pass agentId="system" so the plugin's
+      // scope manager bypasses ACL checks, matching the MCP server behavior.
+      const result = await runtime.callTool("memory_store", params, { agentId: "system" });
       for (const item of result.content) {
         console.log(item.text);
       }
@@ -351,7 +353,7 @@ program
   .action(async (id, opts) => {
     try {
       const runtime = await createMemoryRuntime({ configPath: opts.config, quiet: true });
-      const result = await runtime.callTool("memory_forget", { memoryId: id });
+      const result = await runtime.callTool("memory_forget", { memoryId: id }, { agentId: "system" });
       for (const item of result.content) {
         console.log(item.text);
       }

@@ -24,14 +24,13 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "memory-lancedb-pro": "1.1.0-beta.9",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "commander": "^14.0.0",
     "jiti": "^2.6.1",
+    "memory-lancedb-pro": "github:CortexReach/memory-lancedb-pro#v1.1.0-beta.10",
     "yaml": "^2.7.1"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
     "@sinclair/typebox": "0.34.48",
     "typescript": "^5.9.3"
   },

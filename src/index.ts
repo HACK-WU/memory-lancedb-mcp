@@ -125,6 +125,15 @@ function scopeToAgentScope(scope: string): string {
 }
 
 /**
+ * Build a server name annotated with the active scope (if any).
+ * Helps distinguish multiple MCP server instances in client UIs when
+ * different projects share the same machine.
+ */
+export function buildServerName(baseName: string, scope?: string): string {
+  return scope ? `${baseName} (scope: ${scope})` : baseName;
+}
+
+/**
  * Load the memory-lancedb-pro plugin from npm using jiti.
  * jiti compiles TypeScript on-the-fly, allowing us to use the npm-published
  * source files directly without needing a local build of the parent project.
@@ -219,6 +228,70 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
     config,
 
     async callTool(name: string, params: Record<string, unknown>, ctx?: ToolCallContext): Promise<ToolResult> {
+      // --- Synthetic tool: list_scopes ---
+      // Returns a clean, structured list of scopes by merging:
+      //   1. Configured scope definitions (config.scopes.definitions) — includes empty scopes
+      //   2. Scopes that actually have memories stored (from memory_stats.scopeCounts)
+      // This guarantees the caller sees both registered-but-empty and ad-hoc scopes.
+      if (name === "list_scopes") {
+        try {
+          // "system" is a reserved bypass agentId in the scope manager — it skips all
+          // scope ACLs so memory_stats returns cross-scope counts (see plugin's src/scopes.ts).
+          const statsResult = await api.callTool("memory_stats", {}, { agentId: "system" });
+
+          // Best-effort parse of stats.details.stats.scopeCounts (the structured payload).
+          const statsObj = (statsResult.details?.stats as
+            | { scopeCounts?: Record<string, number> }
+            | undefined) ?? {};
+          const scopeCounts: Record<string, number> = statsObj.scopeCounts ?? {};
+
+          const definitions = config.scopes?.definitions ?? {};
+
+          // Merge: definitions first (preserves description), then any extras from scopeCounts.
+          const scopes: Array<{ name: string; description?: string; count: number }> = [];
+          const seen = new Set<string>();
+          for (const [scopeName, def] of Object.entries(definitions)) {
+            scopes.push({
+              name: scopeName,
+              description: def?.description,
+              count: scopeCounts[scopeName] ?? 0,
+            });
+            seen.add(scopeName);
+          }
+          for (const [scopeName, count] of Object.entries(scopeCounts)) {
+            if (!seen.has(scopeName)) {
+              scopes.push({ name: scopeName, count });
+            }
+          }
+          // Sort: defined scopes first (preserve config order), undefined ones alphabetically at end.
+          // Already in that order by construction.
+
+          const defaultScope = config.scopes?.default ?? "global";
+          const lines = [
+            `Available scopes (${scopes.length}):`,
+            ...scopes.map((s) => {
+              const isDefault = s.name === defaultScope ? " [default]" : "";
+              const desc = s.description ? ` — ${s.description}` : "";
+              return `  • ${s.name}${isDefault} (${s.count} memories)${desc}`;
+            }),
+            ``,
+            `Use the 'scope' parameter on memory_recall / memory_list / memory_stats to query a specific scope.`,
+          ];
+
+          return {
+            content: [{ type: "text", text: lines.join("\n") }],
+            details: { scopes, defaultScope },
+          };
+        } catch (err) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error listing scopes: ${err instanceof Error ? err.message : String(err)}`,
+            }],
+          };
+        }
+      }
+
       // --- Tag preprocessing ---
       // effectiveName may differ from name when memory_list+tags is rewritten to memory_recall.
       let effectiveName = name;
@@ -244,9 +317,34 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
       }
 
       // --- Scope injection ---
-      const effectiveCtx = options.scope
-        ? { ...ctx, agentId: options.scope }
-        : ctx;
+      // When a server-level scope is active, all calls are isolated to that scope.
+      // When no scope is set (cross-scope mode, agentId="system"):
+      //   - memory_store without explicit scope → auto-inject default scope (e.g. "global")
+      //     so the write doesn't land in "agent:system" (the bypass agentId's private scope).
+      //     Keep agentId="system" so isAccessible() bypasses ACL checks on the default scope.
+      //   - memory_store/update/forget WITH explicit scope → keep agentId="system" because
+      //     isSystemBypassId("system")=true makes isAccessible() return true for any valid scope,
+      //     while agentId=undefined gets resolved to "main" by the plugin, which lacks ACL access.
+      let effectiveCtx: ToolCallContext;
+      const baseCtx: ToolCallContext = ctx ?? {};
+      if (options.scope) {
+        effectiveCtx = { ...baseCtx, agentId: options.scope };
+      } else {
+        const isWriteOp = name === "memory_store" || name === "memory_update" || name === "memory_forget";
+        if (isWriteOp && name === "memory_store") {
+          const hasExplicitScope = typeof normalized.scope === "string" && normalized.scope.trim().length > 0;
+          if (!hasExplicitScope) {
+            // No scope specified for store — inject default scope to avoid
+            // writing into "agent:system" (the bypass agentId's private namespace).
+            const defaultScope = config.scopes?.default ?? "global";
+            normalized.scope = defaultScope;
+          }
+          // Keep agentId="system" so isSystemBypassId bypasses ACL on the target scope.
+          effectiveCtx = baseCtx;
+        } else {
+          effectiveCtx = baseCtx;
+        }
+      }
 
       const result = await api.callTool(effectiveName, normalized, effectiveCtx);
 
@@ -265,7 +363,7 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
 
     listTools(): ToolInfo[] {
       const defs = api.getAllToolDefinitions();
-      return defs.map((def) => {
+      const tools = defs.map((def) => {
         const tool: ToolInfo = {
           name: def.name,
           description: def.description,
@@ -280,6 +378,16 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
         }
         return tool;
       });
+      // Synthetic tool: list_scopes — enumerates all available memory scopes.
+      tools.push({
+        name: "list_scopes",
+        description: "列出所有可用的 memory scope 及其记忆数量。每个 scope 对应一个独立的记忆空间。仅在 MCP 启动时未指定 --scope 参数（跨 scope 模式）下推荐使用：此时可通过其他工具的 scope 参数查询或操作不同 scope 的记忆。若启动时已指定 --scope，则所有调用都会被锁定在该 scope 内，scope 参数将受 ACL 限制。",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      });
+      return tools;
     },
 
     async emitEvent(event: string, payload?: unknown, ctx?: unknown): Promise<unknown[]> {
