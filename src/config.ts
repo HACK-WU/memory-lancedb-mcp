@@ -60,11 +60,17 @@ export interface MemConfig {
     bm25Weight?: number;
     minScore?: number;
     hardMinScore?: number;
+    /** Rerank mode: "cross-encoder" (API-based, recommended), "lightweight" (local cosine), "none" (disabled) */
     rerank?: string;
+    /** Rerank API provider: "jina", "siliconflow", "voyage", "pinecone", "dashscope", "tei" */
     rerankProvider?: string;
+    /** Rerank model name (provider-specific, e.g. "jina-reranker-v3", "BAAI/bge-reranker-v2-m3") */
     rerankModel?: string;
+    /** Rerank API endpoint URL */
     rerankEndpoint?: string;
+    /** Rerank API key (supports ${ENV_VAR} syntax) */
     rerankApiKey?: string;
+    /** Rerank API request timeout in milliseconds (default: 5000) */
     rerankTimeoutMs?: number;
     candidatePoolSize?: number;
     recencyHalfLifeDays?: number;
@@ -272,11 +278,49 @@ retrieval:
   filterNoise: true
   minScore: 0.3
   hardMinScore: 0.35
-  # rerank: "cross-encoder"
+  # Rerank improves retrieval precision by re-scoring candidates with a cross-encoder model.
+  # When rerankApiKey is not set, falls back to lightweight cosine similarity reranking.
+  # Set rerank: "none" to disable reranking entirely.
+  rerank: "cross-encoder"
+
+  # --- Jina Reranker (recommended, high quality) ---
   # rerankProvider: "jina"
   # rerankModel: "jina-reranker-v3"
   # rerankEndpoint: "https://api.jina.ai/v1/rerank"
   # rerankApiKey: "\${JINA_API_KEY}"
+
+  # --- SiliconFlow Reranker (Jina-compatible API) ---
+  # rerankProvider: "siliconflow"
+  # rerankModel: "BAAI/bge-reranker-v2-m3"
+  # rerankEndpoint: "https://api.siliconflow.cn/v1/rerank"
+  # rerankApiKey: "\${SILICONFLOW_API_KEY}"
+
+  # --- DashScope Reranker (Alibaba Cloud, good for CJK) ---
+  # rerankProvider: "dashscope"
+  # rerankModel: "gte-rerank-v2"
+  # rerankEndpoint: "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+  # rerankApiKey: "\${DASHSCOPE_API_KEY}"
+
+  # --- Voyage Reranker ---
+  # rerankProvider: "voyage"
+  # rerankModel: "rerank-3"
+  # rerankEndpoint: "https://api.voyageai.com/v1/rerank"
+  # rerankApiKey: "\${VOYAGE_API_KEY}"
+
+  # --- Pinecone Reranker ---
+  # rerankProvider: "pinecone"
+  # rerankModel: "pinecone-rerank-v0"
+  # rerankEndpoint: "https://api.pinecone.io/rerank"
+  # rerankApiKey: "\${PINECONE_API_KEY}"
+
+  # --- HuggingFace TEI (self-hosted) ---
+  # rerankProvider: "tei"
+  # rerankModel: "BAAI/bge-reranker-v2-m3"
+  # rerankEndpoint: "http://localhost:8080/rerank"
+  # rerankApiKey: ""
+
+  # Rerank API timeout in ms (default: 5000)
+  # rerankTimeoutMs: 5000
 
 # Scope isolation
 scopes:

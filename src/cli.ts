@@ -436,6 +436,18 @@ configCmd
       console.log(`  Smart extraction: ${config.smartExtraction !== false}`);
       console.log(`  Auto-capture: ${config.autoCapture !== false}`);
       console.log(`  Auto-recall: ${config.autoRecall === true}`);
+      // Rerank info (note: loadConfig has already expanded env vars)
+      const retCfg = config.retrieval || {};
+      const rMode = (retCfg as Record<string, unknown>).rerank as string | undefined;
+      const rKey = (retCfg as Record<string, unknown>).rerankApiKey as string | undefined;
+      const rProvider = (retCfg as Record<string, unknown>).rerankProvider as string | undefined;
+      if (rMode === "none") {
+        console.log(`  Rerank: disabled (none)`);
+      } else {
+        const hasKey = rKey && String(rKey).length > 0;
+        const keyStatus = hasKey ? "present" : "not set (lightweight fallback)";
+        console.log(`  Rerank: ${rMode || "cross-encoder"} (provider=${rProvider || "jina"}, apiKey=${keyStatus})`);
+      }
     } catch (err) {
       console.error(`❌ Config invalid: ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -492,14 +504,43 @@ program
         failed++;
       }
 
-      // Check 4: Plugin loads
+      // Check 4: Rerank configuration
+      // Note: loadConfig() already expanded env vars, so raw ${...} references
+      // are resolved to their actual values (or empty string if env var is unset).
+      // We read the raw YAML separately to detect "configured but env var not set".
+      const retrieval = config.retrieval || {};
+      const rerankMode = (retrieval as Record<string, unknown>).rerank as string | undefined;
+      const rerankApiKey = (retrieval as Record<string, unknown>).rerankApiKey as string | undefined;
+      if (rerankMode === "none") {
+        console.log(`ℹ️  Rerank: disabled (mode=none)`);
+      } else if (rerankApiKey && String(rerankApiKey).length > 0) {
+        const provider = (retrieval as Record<string, unknown>).rerankProvider as string || "jina";
+        const model = (retrieval as Record<string, unknown>).rerankModel as string || "(default)";
+        console.log(`✅ Rerank: ${rerankMode || "cross-encoder"} (provider=${provider}, model=${model})`);
+        passed++;
+      } else {
+        const provider = (retrieval as Record<string, unknown>).rerankProvider as string || "jina";
+        // Check the raw YAML to distinguish "never configured" vs "env var not set"
+        let configSource = "no API key configured";
+        try {
+          const rawYaml = readFileSync(configPath, "utf-8");
+          const match = rawYaml.match(/^[ \t]*rerankApiKey:[ \t]*"\$\{([^}]+)\}"$/m);
+          if (match) {
+            configSource = `env var ${match[1]} not set`;
+          }
+        } catch { /* ignore read errors, fall back to generic message */ }
+        console.log(`ℹ️  Rerank: ${rerankMode || "cross-encoder"} (provider=${provider}) — ${configSource}, using lightweight cosine reranking`);
+        passed++; // not a failure, lightweight reranking is valid
+      }
+
+      // Check 5: Plugin loads
       try {
         const runtime = await createMemoryRuntime({ config, quiet: true });
         const tools = runtime.listTools();
         console.log(`✅ Plugin loaded: ${tools.length} tools registered`);
         passed++;
 
-        // Check 5: Tools list
+        // Check 6: Tools list
         console.log(`✅ Tools: ${tools.map(t => t.name).join(", ")}`);
         passed++;
       } catch (err) {

@@ -703,6 +703,95 @@ smartExtraction:
   apiKey: "${OPENAI_API_KEY}"
 ```
 
+### 重排模型配置（Rerank）
+
+重排模型对混合检索的候选结果进行二次精排，显著提升检索精度。支持以下模式：
+
+| 模式 | 说明 | API 开销 |
+|------|------|----------|
+| `cross-encoder` | 调用重排 API（推荐，精度最高） | 每次检索一次 API 调用 |
+| `lightweight` | 本地余弦相似度重排（零成本，精度一般） | 无 |
+| `none` | 关闭重排 | 无 |
+
+默认 `rerank: "cross-encoder"`。若未配置 `rerankApiKey`，自动退化为 `lightweight` 模式。
+
+**支持的供应商：**
+
+| 供应商 | rerankProvider | 默认模型 | 说明 |
+|--------|---------------|---------|------|
+| Jina | `jina` | `jina-reranker-v3` | 推荐，高质量 |
+| SiliconFlow | `siliconflow` | `BAAI/bge-reranker-v2-m3` | Jina 兼容格式，国内访问友好 |
+| DashScope | `dashscope` | `gte-rerank-v2` | 阿里云，中文优化 |
+| Voyage | `voyage` | `rerank-3` | 多语言支持 |
+| Pinecone | `pinecone` | `pinecone-rerank-v0` | Pinecone 生态 |
+| HuggingFace TEI | `tei` | 自选 | 自部署，免费 |
+
+**配置示例：**
+
+Jina（推荐）：
+```yaml
+retrieval:
+  rerank: "cross-encoder"
+  rerankProvider: "jina"
+  rerankModel: "jina-reranker-v3"
+  rerankEndpoint: "https://api.jina.ai/v1/rerank"
+  rerankApiKey: "${JINA_API_KEY}"
+```
+
+SiliconFlow（国内推荐）：
+```yaml
+retrieval:
+  rerank: "cross-encoder"
+  rerankProvider: "siliconflow"
+  rerankModel: "BAAI/bge-reranker-v2-m3"
+  rerankEndpoint: "https://api.siliconflow.cn/v1/rerank"
+  rerankApiKey: "${SILICONFLOW_API_KEY}"
+```
+
+DashScope（中文优化）：
+```yaml
+retrieval:
+  rerank: "cross-encoder"
+  rerankProvider: "dashscope"
+  rerankModel: "gte-rerank-v2"
+  rerankEndpoint: "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+  rerankApiKey: "${DASHSCOPE_API_KEY}"
+```
+
+自部署 TEI（免费）：
+```yaml
+retrieval:
+  rerank: "cross-encoder"
+  rerankProvider: "tei"
+  rerankModel: "BAAI/bge-reranker-v2-m3"
+  rerankEndpoint: "http://localhost:8080/rerank"
+  rerankApiKey: ""
+```
+
+关闭重排：
+```yaml
+retrieval:
+  rerank: "none"
+```
+
+**完整检索参数：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `retrieval.mode` | `hybrid` | 检索模式：`hybrid`（向量+BM25）或 `vector`（纯向量） |
+| `retrieval.vectorWeight` | `0.7` | 向量检索权重 |
+| `retrieval.bm25Weight` | `0.3` | BM25 检索权重 |
+| `retrieval.minScore` | `0.3` | 最低分数阈值 |
+| `retrieval.hardMinScore` | `0.35` | 重排后硬性最低分数 |
+| `retrieval.rerank` | `cross-encoder` | 重排模式 |
+| `retrieval.rerankProvider` | `jina` | 重排 API 供应商 |
+| `retrieval.rerankModel` | `jina-reranker-v3` | 重排模型名称 |
+| `retrieval.rerankEndpoint` | Jina 默认 | 重排 API 端点 |
+| `retrieval.rerankApiKey` | — | 重排 API 密钥 |
+| `retrieval.rerankTimeoutMs` | `5000` | 重排 API 超时（毫秒） |
+| `retrieval.candidatePoolSize` | `20` | 候选池大小 |
+| `retrieval.filterNoise` | `true` | 是否过滤噪声结果 |
+
 ### 环境变量
 
 | Variable | Description |
@@ -710,6 +799,10 @@ smartExtraction:
 | `MEM_CONFIG_PATH` | 覆盖默认配置文件路径 |
 | `OPENAI_API_KEY` | OpenAI API 密钥 |
 | `SILICONFLOW_API_KEY` | SiliconFlow API 密钥 |
+| `JINA_API_KEY` | Jina Rerank API 密钥 |
+| `DASHSCOPE_API_KEY` | DashScope Rerank API 密钥 |
+| `VOYAGE_API_KEY` | Voyage Rerank API 密钥 |
+| `PINECONE_API_KEY` | Pinecone Rerank API 密钥 |
 
 ---
 
