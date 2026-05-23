@@ -36,3 +36,9 @@ logs/
 # Test coverage
 coverage/
 .nyc_output/
+
+# Test data files (generated)
+test/test-data.json
+
+# Test reports
+test-reports/
