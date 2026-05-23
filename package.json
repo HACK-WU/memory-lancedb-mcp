@@ -12,6 +12,11 @@
     "dev": "tsc --watch",
     "start": "node dist/cli.js serve",
     "test": "node --test test/*.test.mjs",
+    "test:cli": "node --test test/cli.test.mjs",
+    "test:mcp": "node --test test/mcp.test.mjs",
+    "test:unit": "node --test test/unit/*.test.mjs",
+    "test:all": "node test/run-all-tests.mjs",
+    "test:report": "node test/run-all-tests.mjs && open test-reports/",
     "setup-hooks": "npx lefthook install",
     "prepare": "[ \"$CI\" = true ] || [ -n \"$GITHUB_ACTIONS\" ] || npx lefthook install"
   },
