@@ -1,0 +1,70 @@
+# =============================================================================
+# Lefthook Configuration — Pre-commit 代码检测
+# 文档：https://github.com/evilmartians/lefthook
+# =============================================================================
+
+pre-commit:
+  parallel: true
+  commands:
+
+    # -----------------------------------------------------------------------
+    # 1. 秘钥/凭证泄露检测（gitleaks + 基础正则 fallback）
+    # -----------------------------------------------------------------------
+    secrets:
+      run: bash scripts/check-secrets.sh
+
+    # -----------------------------------------------------------------------
+    # 2. Git 合并冲突标记检测
+    # -----------------------------------------------------------------------
+    merge-conflicts:
+      run: bash scripts/check-conflicts.sh
+
+    # -----------------------------------------------------------------------
+    # 3. 敏感文件检测（.env / credentials / secrets）
+    # -----------------------------------------------------------------------
+    env-files:
+      run: |
+        staged=$(git diff --cached --name-only --diff-filter=ACMR)
+        bad=$(echo "$staged" | grep -E '\.env$|\.env\.(local|production|development|staging|test)$|credentials\.json$|secrets\.(json|yml|yaml)$|config/credentials' || true)
+        if [ -n "$bad" ]; then
+          echo "ERROR: 敏感文件不应提交："
+          echo "$bad"
+          exit 1
+        fi
+        echo "OK: 未发现敏感文件"
+
+    # -----------------------------------------------------------------------
+    # 4. 大文件检测（>1MB，仅警告）
+    # -----------------------------------------------------------------------
+    large-files:
+      run: |
+        found=0
+        for f in $(git diff --cached --name-only --diff-filter=ACMR); do
+          [ -f "$f" ] || continue
+          sz=$(du -k "$f" 2>/dev/null | cut -f1)
+          if [ -n "$sz" ] && [ "$sz" -gt 1024 ]; then
+            echo "WARNING: $f ($(( sz / 1024 ))MB > 1MB)"
+            found=1
+          fi
+        done
+        [ "$found" -eq 0 ] && echo "OK: 无大文件"
+
+    # -----------------------------------------------------------------------
+    # 5. 调试代码残留（TS/JS，仅警告）
+    # -----------------------------------------------------------------------
+    debug-code:
+      glob: "*.{ts,js,mjs,cjs,tsx,jsx}"
+      run: |
+        if git diff --cached -- {staged_files} | grep -qE '^\+\s*(console\.log\(|debugger)'; then
+          echo "WARNING: 发现调试代码残留 (console.log / debugger):"
+          git diff --cached -- {staged_files} | grep -nE '^\+\s*(console\.log\(|debugger)' | head -5
+        else
+          echo "OK: 无调试代码"
+        fi
+
+    # -----------------------------------------------------------------------
+    # 6. TypeScript 类型检查（仅 TS 文件变更时）
+    # -----------------------------------------------------------------------
+    ts-check:
+      glob: "*.{ts,tsx}"
+      run: npx tsc --noEmit

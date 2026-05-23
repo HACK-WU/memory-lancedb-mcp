@@ -2,3 +2,37 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
+.env.local
+.env.development
+.env.production
+.env.staging
+.env.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Credentials / Secrets
+credentials.json
+credentials.yml
+credentials.yaml
+secrets.json
+secrets.yml
+secrets.yaml
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+coverage/
+.nyc_output/

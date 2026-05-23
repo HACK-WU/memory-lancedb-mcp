@@ -11,7 +11,9 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/cli.js serve",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "setup-hooks": "npx lefthook install",
+    "prepare": "[ \"$CI\" = true ] || [ -n \"$GITHUB_ACTIONS\" ] || npx lefthook install"
   },
   "keywords": [
     "mcp",
@@ -31,6 +33,7 @@
     "yaml": "^2.7.1"
   },
   "devDependencies": {
+    "@evilmartians/lefthook": "^2.0.11",
     "@sinclair/typebox": "0.34.48",
     "typescript": "^5.9.3"
   },
