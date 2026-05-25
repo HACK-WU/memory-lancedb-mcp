@@ -42,3 +42,6 @@ test/test-data.json
 
 # Test reports
 test-reports/
+
+# Knowledge index runtime data (re-initializable from _template/)
+knowledge-index/kb/
