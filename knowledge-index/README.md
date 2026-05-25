@@ -64,7 +64,7 @@ flowchart TB
 flowchart LR
     GI["group-index.json<br/>Group 树索引"]
     RC["relations-cache.json<br/>Relation 热点缓存 / 关键词 / 分区"]
-    KB["kb/<scope>/<group>/index.json<br/>本地 KB 原文"]
+    KB["kb/scope/group/index.json<br/>本地 KB 原文"]
 
     GI --> RC
     RC --> KB
