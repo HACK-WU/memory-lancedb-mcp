@@ -25,17 +25,25 @@ interface GroupIndex {
 // ─── 辅助函数 ───
 
 /**
- * 在树中按路径查找节点
- * @param roots 根节点对象
- * @param parentPath 父节点路径（如 "监控/告警中心"）
- * @returns [父节点对象, 路径段数组] 或 null
+ * 在树中按路径查找"容器"节点：
+ * - parentPath 为空字符串时，返回 roots（根容器），用于操作根节点本身
+ * - parentPath 为 "a/b" 时，返回 a 节点下的 b 节点对象（即 b 的子节点容器）
+ *
+ * 注意：在树结构中，每个节点本身就是其子节点的容器（Record<string, unknown>）。
+ * 删除/创建子节点等价于在父容器上 delete/赋值 对应 key。
+ *
+ * @returns [父容器对象, 路径段数组] 或 null（路径不存在）
  */
-function findParentNode(
+function findContainer(
   roots: Record<string, Record<string, unknown>>,
   parentPath: string
 ): [Record<string, unknown>, string[]] | null {
   const segments = parentPath.split('/').filter(Boolean);
-  if (segments.length === 0) return null;
+
+  // 空路径：返回 roots 作为容器（用于操作根节点）
+  if (segments.length === 0) {
+    return [roots as Record<string, unknown>, []];
+  }
 
   // 第一段是根节点名
   const rootName = segments[0];
@@ -118,16 +126,24 @@ program
 
         // ─── 创建子节点 ───
         case 'create': {
-          if (!parent) {
-            output({ ok: false, error: 'create 需要 --parent 参数' });
+          if (parent === undefined || parent === null) {
+            output({ ok: false, error: 'create 需要 --parent 参数（顶层节点请使用 create-root）' });
             process.exit(1);
           }
           if (!name) {
             output({ ok: false, error: 'create 需要 --name 参数' });
             process.exit(1);
           }
+          if (typeof name === 'string' && name.includes('/')) {
+            output({ ok: false, error: `节点名 "${name}" 不能包含 "/"` });
+            process.exit(1);
+          }
+          if (!parent) {
+            output({ ok: false, error: 'create 的父节点路径不能为空，顶层节点请使用 create-root' });
+            process.exit(1);
+          }
 
-          const result = findParentNode(data.roots, parent);
+          const result = findContainer(data.roots, parent);
           if (!result) {
             output({ ok: false, error: `父节点路径不存在：${parent}` });
             process.exit(1);
@@ -147,8 +163,9 @@ program
 
         // ─── 删除节点 ───
         case 'delete': {
-          if (!parent) {
-            output({ ok: false, error: 'delete 需要 --parent 参数' });
+          // 允许 --parent="" 删除根节点本身
+          if (parent === undefined || parent === null) {
+            output({ ok: false, error: 'delete 需要 --parent 参数（删除根节点请传 --parent ""）' });
             process.exit(1);
           }
           if (!name) {
@@ -156,13 +173,13 @@ program
             process.exit(1);
           }
 
-          // 默认根节点不可删除
-          if (name === DEFAULT_ROOT_NAME && parent.split('/')[0] === name) {
+          // 默认根节点不可删除：仅当 parent 为空（即操作的是根节点）且 name === DEFAULT_ROOT_NAME 时拦截
+          if (parent === '' && name === DEFAULT_ROOT_NAME) {
             output({ ok: false, error: `默认根节点 "${DEFAULT_ROOT_NAME}" 不可删除` });
             process.exit(1);
           }
 
-          const result = findParentNode(data.roots, parent);
+          const result = findContainer(data.roots, parent);
           if (!result) {
             output({ ok: false, error: `父节点路径不存在：${parent}` });
             process.exit(1);
@@ -170,7 +187,7 @@ program
 
           const [parentNode] = result;
           if (parentNode[name] === undefined) {
-            output({ ok: false, error: `节点 "${name}" 不存在于 "${parent}" 下` });
+            output({ ok: false, error: `节点 "${name}" 不存在于 "${parent || '(根)'}" 下` });
             process.exit(1);
           }
 
@@ -188,7 +205,7 @@ program
 
           delete parentNode[name];
           writeJson(indexPath, data);
-          output({ ok: true, path: `${parent}/${name}` });
+          output({ ok: true, path: parent ? `${parent}/${name}` : name });
           break;
         }
 

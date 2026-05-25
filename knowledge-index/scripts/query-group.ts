@@ -252,11 +252,15 @@ function partitionRelations(
   const hotSet = new Set<string>();
   const emergingIdSet = new Set(emergingItems.map((r) => r.id));
 
-  const emergingSeats = Math.min(reservedEmerging, emergingItems.length);
+  // 新兴热区优先按 lastUsedTime 降序，确保“最近用过的先上”
+  const emergingSorted = [...emergingItems].sort(
+    (a, b) => (b.lastUsedTime ?? 0) - (a.lastUsedTime ?? 0)
+  );
+  const emergingSeats = Math.min(reservedEmerging, emergingSorted.length);
   for (let i = 0; i < emergingSeats; i++) {
-    if (!hotSet.has(emergingItems[i].id)) {
-      hot.push(emergingItems[i]);
-      hotSet.add(emergingItems[i].id);
+    if (!hotSet.has(emergingSorted[i].id)) {
+      hot.push(emergingSorted[i]);
+      hotSet.add(emergingSorted[i].id);
     }
   }
 
@@ -599,12 +603,20 @@ program
   .action(async (opts) => {
     try {
       const { scope } = opts;
-      const rawDepth = parseInt(opts.depth, 10);
+      const rawDepthInput = parseInt(opts.depth, 10);
+      const rawDepth = Number.isFinite(rawDepthInput) && rawDepthInput > 0 ? rawDepthInput : 4;
+      if (!Number.isFinite(rawDepthInput) || rawDepthInput <= 0) {
+        console.warn(`警告：--depth 取值无效或非正整数，已回退为默认 4`);
+      }
       const depth = Math.min(rawDepth, 10);
       if (rawDepth > 10) {
         console.warn(`警告：--depth ${rawDepth} 超过最大值，已限制为 10`);
       }
-      const hotCount = parseInt(opts.hotCount, 10);
+      const hotCountInput = parseInt(opts.hotCount, 10);
+      const hotCount = Number.isFinite(hotCountInput) && hotCountInput > 0 ? hotCountInput : 5;
+      if (!Number.isFinite(hotCountInput) || hotCountInput <= 0) {
+        console.warn(`警告：--hot-count 取值无效或非正整数，已回退为默认 5`);
+      }
       const rawHotCount = hotCount;
       const partitionFilter: string = opts.partition;
       const mode: string = opts.mode;

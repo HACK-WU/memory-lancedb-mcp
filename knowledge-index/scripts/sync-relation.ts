@@ -20,7 +20,7 @@ import {
   getLocalKbDir,
   validateScope,
 } from './lib/scope.js';
-import { calculateScore } from './lib/scoring.js';
+import { calculateScore, recordUse } from './lib/scoring.js';
 import type { Relation } from './lib/scoring.js';
 import type { PartitionConfig } from './lib/constants.js';
 import { DEFAULT_PARTITION_CONFIG } from './lib/constants.js';
@@ -83,8 +83,10 @@ function generateNextId(cache: RelationsCache): string {
 
 /**
  * 校验关键词：
- * 1. 禁止代码符号（路径、文件扩展名、特殊字符）
+ * 1. 禁止纯代码符号/路径/文件名（推定为代码遵引不适合作为词云）
  * 2. 关键词必须在 moduleInfo 原文中出现
+ *
+ * 收紧为“硬拒则”，避免误伤含点合法中文词（如 "v1.0" "OAuth 2.0"）。
  */
 function validateKeywords(
   keywords: string[],
@@ -93,15 +95,25 @@ function validateKeywords(
   const valid: string[] = [];
   const invalid: string[] = [];
 
-  // 代码符号模式：路径分隔符、文件扩展名、特殊符号
-  const CODE_SYMBOL_PATTERN = /[./\\@#{}[\]()<>;:=`$]|\.ts$|\.js$|\.md$|\.json$|\.yml$|\.yaml$|\.sh$/;
+  // 硬拒则：路径分隔符 / 常见代码符号 / 模板字符 / 文件扩展名
+  const HARD_REJECT_PATTERN = /[\/\\@#{}\[\]<>;`$]|^[*~`#=]+$|\.(ts|js|tsx|jsx|md|json|yml|yaml|sh|py|go|rs|java|c|cpp|h|hpp)$/i;
+  // 软拒则：出现下面任一且不含中文字符，推定为代码表达式而非词语
+  const CODE_HINT_PATTERN = /[()=:]/;
+  const HAS_CJK = /[\u4e00-\u9fa5]/;
 
   for (const kw of keywords) {
+    if (typeof kw !== 'string') {
+      invalid.push(String(kw));
+      continue;
+    }
     const trimmed = kw.trim();
     if (!trimmed) continue;
 
-    // 检查是否包含代码符号
-    if (CODE_SYMBOL_PATTERN.test(trimmed)) {
+    if (HARD_REJECT_PATTERN.test(trimmed)) {
+      invalid.push(trimmed);
+      continue;
+    }
+    if (CODE_HINT_PATTERN.test(trimmed) && !HAS_CJK.test(trimmed)) {
       invalid.push(trimmed);
       continue;
     }
@@ -155,6 +167,19 @@ function syncSingleRelation(
     // 更新已有关键词（合并去重）
     const mergedKw = new Set([...existingRel.keywords, ...validKeywords]);
     existingRel.keywords = [...mergedKw];
+    // 将重复同步记为一次使用（受 5min 防刷限制），
+    // 以保证 lastUsedTime 能反映最近一次同步，供后续 query-group 计入新兴热区。
+    const updated = recordUse(existingRel, now);
+    existingRel.useCount = updated.useCount;
+    existingRel.lastUsedTime = updated.lastUsedTime;
+    existingRel.score = calculateScore(
+      existingRel.useCount,
+      existingRel.lastUsedTime,
+      now,
+      config.halfLifeHours
+    );
+    // 重新按 score 降序
+    groupData.hot_relations.sort((a, b) => b.score - a.score);
   } else {
     // 创建新 Relation
     const newRel: Relation = {
@@ -187,12 +212,10 @@ function syncSingleRelation(
         }
       }
 
-      // 截断关键词上限
+      // 截断关键词上限：淘汰最早的（头部），保留最新的（尾部）
       if (groupData.word_cloud_keywords.length > config.maxKeywordCount) {
-        groupData.word_cloud_keywords = groupData.word_cloud_keywords.slice(
-          0,
-          config.maxKeywordCount
-        );
+        const overflow = groupData.word_cloud_keywords.length - config.maxKeywordCount;
+        groupData.word_cloud_keywords.splice(0, overflow);
       }
 
       // 移除被淘汰的 Relation
@@ -343,6 +366,16 @@ program
           ok: false,
           error: '单条模式需要 --group --relation --module-info --keywords 参数',
         });
+        process.exit(1);
+      }
+
+      // 空内容防护（仅空格/制表符也不能接受）
+      if (!String(moduleInfo).trim()) {
+        output({ ok: false, error: '--module-info 内容不能为空' });
+        process.exit(1);
+      }
+      if (!String(group).trim() || !String(relation).trim()) {
+        output({ ok: false, error: '--group / --relation 不能为空' });
         process.exit(1);
       }
 

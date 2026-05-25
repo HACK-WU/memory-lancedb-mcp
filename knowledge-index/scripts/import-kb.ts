@@ -121,6 +121,9 @@ function walkFiles(dir: string, rootDir: string = dir): FileEntry[] {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
   for (const entry of entries) {
+    // 防御软链接造成的潜在环路与逻辑不一致
+    if (entry.isSymbolicLink()) continue;
+
     const absPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       results.push(...walkFiles(absPath, rootDir));
@@ -300,8 +303,8 @@ function importConventionMode(
     }
 
     const rawRelationText = stripMarkdownExtension(path.posix.basename(file.relativePath));
-    // 移除 Markdown 格式字符和代码符号
-    const relationText = rawRelationText.replace(/[*~`#\[\](){}<>]/g, '').trim() || stripMarkdownExtension(path.posix.basename(file.relativePath));
+    // 仅剥除 Markdown 强格式字符，保留 [] () <> # 等可能出现在合法文件名中的字符
+    const relationText = rawRelationText.replace(/[*~`]/g, '').trim() || stripMarkdownExtension(path.posix.basename(file.relativePath));
     const dirName = path.posix.dirname(file.relativePath);
     const groupPath = dirName === '.' ? rootName : `${rootName}/${dirName}`;
     const moduleInfo = content;
@@ -328,7 +331,18 @@ function importMappingMode(
 
   for (const group of mapping.groups || []) {
     const trimmedGroupPath = trimSlashes(group.path || '');
-    const fullGroupPath = trimmedGroupPath ? `${rootName}/${trimmedGroupPath}` : rootName;
+    // 去重：如果用户在 mapping.path 中已以 rootName 开头，避免双层嵌套。
+    let normalizedGroupPath = trimmedGroupPath;
+    if (trimmedGroupPath) {
+      const segs = trimmedGroupPath.split('/').filter(Boolean);
+      if (segs[0] === rootName) {
+        console.warn(
+          `警告：mapping path "${trimmedGroupPath}" 首段与 --root-name 重名，已自动去重`
+        );
+        normalizedGroupPath = segs.slice(1).join('/');
+      }
+    }
+    const fullGroupPath = normalizedGroupPath ? `${rootName}/${normalizedGroupPath}` : rootName;
     summary.groups_created += ensureGroupPath(groupIndex, fullGroupPath);
 
     for (const source of group.sources || []) {
@@ -369,8 +383,8 @@ function importMappingMode(
         continue;
       }
 
-      // 移除 Markdown 格式字符和代码符号
-      const relationText = rawRelationText.replace(/[*~`#\[\](){}<>]/g, '').trim() || rawRelationText;
+      // 仅剥除 Markdown 强格式字符，保留较多合法字符
+      const relationText = rawRelationText.replace(/[*~`]/g, '').trim() || rawRelationText;
 
       const keywords = keywordMap.get(fileRelativePath) || [];
       upsertImportedRelation(relationsCache, fullGroupPath, relationText, keywords);

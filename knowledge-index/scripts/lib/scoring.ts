@@ -117,13 +117,19 @@ export function hybridPartition(
   const warm: Relation[] = [];
   const cold: Relation[] = [];
 
-  // 新兴热区（保留席位）
-  const emergingHotSeats = Math.min(reservedEmerging, emergingItems.length);
+  // 新兴热区（保留席位）——按 lastUsedTime 降序，优先最近使用的
+  const emergingSorted = [...emergingItems].sort(
+    (a, b) => (b.lastUsedTime ?? 0) - (a.lastUsedTime ?? 0)
+  );
+  const emergingHotSeats = Math.min(reservedEmerging, emergingSorted.length);
   for (let i = 0; i < emergingHotSeats; i++) {
-    if (!hot.includes(emergingItems[i])) {
-      hot.push(emergingItems[i]);
+    if (!hot.includes(emergingSorted[i])) {
+      hot.push(emergingSorted[i]);
     }
   }
+
+  // 记录新兴席位数量，用于后续上限截断时区分保留优先级
+  const emergingHeldCount = hot.length;
 
   // 历史热区（填充剩余席位）
   const totalHotSeats = Math.max(
@@ -143,8 +149,19 @@ export function hybridPartition(
   warm.push(...remaining.slice(0, warmCount));
   cold.push(...remaining.slice(warmCount));
 
-  // 上限截断（O4 决策）
-  if (maxHotCount && hot.length > maxHotCount) hot.length = maxHotCount;
+  // 上限截断（O4 决策）——优先保留新兴席位，再保留历史热门
+  if (maxHotCount && hot.length > maxHotCount) {
+    if (emergingHeldCount >= maxHotCount) {
+      // 新兴席位已填满上限，直接截断为前 N 个（已按最近使用时间排序）
+      hot.length = maxHotCount;
+    } else {
+      // 新兴席位全部保留，剩余名额从历史热区取 top
+      const emergingPart = hot.slice(0, emergingHeldCount);
+      const historyPart = hot.slice(emergingHeldCount, maxHotCount);
+      hot.length = 0;
+      hot.push(...emergingPart, ...historyPart);
+    }
+  }
   if (maxWarmCount && warm.length > maxWarmCount) warm.length = maxWarmCount;
   if (maxColdCount && cold.length > maxColdCount) cold.length = maxColdCount;
 
@@ -197,11 +214,14 @@ export function boundaryDecay(
     newWarm[0].score = Math.max(0, newWarm[0].score - decayStep);
   }
 
-  // 步骤3：热区最低分衰减到原常温区最高分
-  newHot[newHot.length - 1].score = originMax;
-
-  // 步骤4：热区最高分 - decayStep
-  if (newHot.length > 0) {
+  if (newHot.length === 1) {
+    // 单元素退化：该元素既是最高也是最低，按“热区最高分 - decayStep”执行，
+    // 不覆盖为 originMax，避免误将分数拉低到常温区水平
+    newHot[0].score = Math.max(0, newHot[0].score - decayStep);
+  } else {
+    // 步骤3：热区最低分衰减到原常温区最高分
+    newHot[newHot.length - 1].score = originMax;
+    // 步骤4：热区最高分 - decayStep
     newHot[0].score = Math.max(0, newHot[0].score - decayStep);
   }
 

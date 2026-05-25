@@ -161,6 +161,9 @@ function walkMarkdownFiles(dir: string, rootDir: string = dir): FileEntry[] {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
   for (const entry of entries) {
+    // 防御软链接造成的潜在环路与逻辑不一致
+    if (entry.isSymbolicLink()) continue;
+
     const absPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       results.push(...walkMarkdownFiles(absPath, rootDir));
@@ -262,14 +265,71 @@ function buildIncrementalPending(
     let modified = 0;
     let deleted = 0;
 
+    // 把 repo 内绝对/相对路径转换为相对 sourceDir 的 posix 路径，越界返回 null
+    const toSourceRel = (changedPath: string): string | null => {
+      const rel = toPosix(path.relative(sourceDir, path.join(gitInfo.repoRoot, changedPath)));
+      if (rel.startsWith('..')) return null;
+      return rel;
+    };
+
     const lines = raw ? raw.split(/\r?\n/) : [];
     for (const line of lines) {
-      const [statusRaw, changedPathRaw] = line.split(/\t+/);
-      if (!statusRaw || !changedPathRaw) continue;
+      if (!line) continue;
+      const cols = line.split(/\t+/);
+      const statusRaw = cols[0];
+      if (!statusRaw) continue;
 
-      const status = statusRaw.charAt(0) as 'A' | 'M' | 'D';
-      const relativePath = toPosix(path.relative(sourceDir, path.join(gitInfo.repoRoot, changedPathRaw)));
-      if (relativePath.startsWith('..')) continue;
+      const statusChar = statusRaw.charAt(0);
+
+      // R/C：重命名/复制，三列：R<score>\t<old>\t<new>
+      if (statusChar === 'R' || statusChar === 'C') {
+        const oldChanged = cols[1];
+        const newChanged = cols[2];
+        if (!oldChanged || !newChanged) continue;
+
+        const oldRel = toSourceRel(oldChanged);
+        const newRel = toSourceRel(newChanged);
+
+        // 旧文件如果在 source 范围内且是 .md，则视为删除（但仅 R 才删除，C 是复制不删除）
+        if (statusChar === 'R' && oldRel && /\.md$/i.test(oldRel)) {
+          const existingEntry = existingEntryMap.get(oldRel);
+          deletedFiles.push({
+            path: oldRel,
+            memoryId: existingEntry?.memoryId ?? null,
+            fullPath: existingEntry?.fullPath ?? buildFullPath(rootName, oldRel),
+          });
+          deleted++;
+        }
+
+        // 新文件作为新增加入 pending（前提是仍在 source 中且仍是 md）
+        if (newRel && /\.md$/i.test(newRel) && currentFileSet.has(newRel)) {
+          const existingEntry = existingEntryMap.get(newRel);
+          pendingFiles.push({
+            path: newRel,
+            filename: stripMarkdownExtension(path.posix.basename(newRel)),
+            dir: path.posix.dirname(newRel) === '.' ? '' : path.posix.dirname(newRel),
+            changeType: 'A',
+            needsEnrichment: false,
+            content: null,
+            // 重命名时尝试沿用旧 memoryId，避免向量索引漂移
+            previousMemoryId:
+              existingEntry?.memoryId ??
+              (statusChar === 'R' && oldRel ? existingEntryMap.get(oldRel)?.memoryId ?? null : null),
+          });
+          added++;
+        }
+        continue;
+      }
+
+      // T（类型变更）当作 M 处理；U（未合并）跳过
+      if (statusChar === 'U') continue;
+
+      const changedPathRaw = cols[1];
+      if (!changedPathRaw) continue;
+
+      const status = (statusChar === 'A' || statusChar === 'D' ? statusChar : 'M') as 'A' | 'M' | 'D';
+      const relativePath = toSourceRel(changedPathRaw);
+      if (!relativePath) continue;
       if (!/\.md$/i.test(relativePath)) continue;
 
       if (status === 'D') {

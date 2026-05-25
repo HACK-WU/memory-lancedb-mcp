@@ -164,7 +164,7 @@ npx jiti knowledge-index/scripts/sync-relation.ts \
       "group": "项目/API",
       "relation": "用户登录",
       "module_info": "## 登录流程\n...",
-      "keywords": "登录,认证,token"
+      "keywords": ["登录", "认证", "token"]
     }
   ]
 }
@@ -178,7 +178,7 @@ npx jiti knowledge-index/scripts/sync-relation.ts \
 |------|------|------|------|
 | `--scope` | string | 是 | 项目隔离标识 |
 | `--source` | string | 是 | 外部知识库根目录路径 |
-| `--root-name` | string | 是 | 导入根节点名称（不可与已有根节点重名） |
+| `--root-name` | string | 是 | 导入根节点名称（已存在则幂等覆盖更新，会发出警告） |
 | `--mapping` | string | 否 | JSON 映射配置文件（提供则进入配置模式） |
 | `--scan-index` | string | 否 | scan-index.json 路径，用于复用摘要关键词 |
 
@@ -201,16 +201,23 @@ npx jiti knowledge-index/scripts/import-kb.ts \
 **Mapping 文件格式**：
 ```json
 {
-  "mapping": [
+  "root_name": "可选，提供后会覆盖 --root-name",
+  "groups": [
     {
-      "group": "项目/API",
-      "file": "docs/api.md",
-      "relation": "API 文档",
-      "code_refs": ["src/api.ts"]
+      "path": "API",
+      "sources": [
+        {
+          "file": "docs/api.md",
+          "relation": "API 文档",
+          "code_refs": ["src/api.ts"]
+        }
+      ]
     }
   ]
 }
 ```
+
+> 说明：`groups[].path` 是相对 `root_name` 的路径（不包含根名）；若首段与 `root_name` 重名，导入时会发出警告并自动去重，避免双层嵌套。一个 `path` 下可配多个 `sources`，每个对应一个 Relation。
 
 ### 6. scan-kb — 预扫描与增量扫描
 
