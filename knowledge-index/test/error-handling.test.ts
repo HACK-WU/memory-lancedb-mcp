@@ -173,12 +173,52 @@ describe('预扫描异常', () => {
     const s = mkScope('err-scan');
     const r = runJson('scan-kb.ts', ['scan', '--scope', s, '--source', '/nonexistent/path', '--root-name', 'wiki']);
     assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('source 目录不存在或不是目录'));
+    assert.ok(r.hint.includes('--source'));
+    assert.ok(Array.isArray(r.next_step));
+    assert.ok(r.next_step.length >= 2);
   });
   it('scan-kb vectorize 无 scan-index', () => {
     const s = mkScope('err-scan');
     runJson('manage-index.ts', ['--scope', s, '--action', 'create-root', '--root-name', 'wiki']);
     const r = runJson('scan-kb.ts', ['vectorize', '--scope', s]);
     assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('scan-index.json 不存在'));
+    assert.ok(r.hint.includes('scan --results'));
+    assert.ok(Array.isArray(r.possible_causes));
+    assert.ok(r.possible_causes.some((item: string) => item.includes('scan-pending.json')));
+  });
+  it('scan-kb scan --results 缺少 pending 文件时给出下一步提示', () => {
+    const s = mkScope('err-scan');
+    const src = mkTmp('ki-err-results-no-pending');
+    const resultsFile = path.join(src, 'results.json');
+    fs.writeFileSync(resultsFile, JSON.stringify({ entries: [] }, null, 2));
+
+    const r = runJson('scan-kb.ts', ['scan', '--scope', s, '--source', src, '--root-name', 'wiki', '--results', resultsFile]);
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('scan-pending.json 不存在'));
+    assert.ok(r.hint.includes('不带 `--results` 的 `scan`'));
+    assert.ok(Array.isArray(r.next_step));
+    assert.ok(r.next_step[0].includes('scan --scope'));
+  });
+  it('scan-kb scan --results 缺少结果文件时返回格式示例', () => {
+    const s = mkScope('err-scan');
+    const src = mkTmp('ki-err-missing-results');
+    runJson('scan-kb.ts', ['scan', '--scope', s, '--source', src, '--root-name', 'wiki']);
+
+    const r = runJson('scan-kb.ts', ['scan', '--scope', s, '--source', src, '--root-name', 'wiki', '--results', path.join(src, 'missing.json')]);
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('results 文件不存在'));
+    assert.ok(r.hint.includes('entries'));
+    assert.deepStrictEqual(r.example.entries[0].keywords, ['API', '接口', '认证']);
+  });
+  it('scan-kb vectorize --complete 缺少完成文件时返回格式示例', () => {
+    const s = mkScope('err-scan');
+    const r = runJson('scan-kb.ts', ['vectorize', '--scope', s, '--complete', '/tmp/not-found-complete.json']);
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('complete 文件不存在'));
+    assert.ok(r.hint.includes('memoryId'));
+    assert.strictEqual(r.example.entries[0].path, 'docs/api.md');
   });
   it('scan-kb 空 md 文件被跳过', () => {
     const s = mkScope('err-scan');
@@ -187,9 +227,7 @@ describe('预扫描异常', () => {
     fs.writeFileSync(path.join(src, 'good.md'), '# good');
     const r = runJson('scan-kb.ts', ['scan', '--scope', s, '--source', src, '--root-name', 'wiki']);
     assert.strictEqual(r.ok, true);
-    // 空 .md 文件（size=0）被 walkMarkdownFiles 过滤，不计入 total_files
     assert.strictEqual(r.total_files, 1);
-    // 验证 empty.md 不在 pending 中
     const pending = JSON.parse(fs.readFileSync(r.pending_file, 'utf-8'));
     assert.ok(!pending.files.some((f: any) => f.path === 'empty.md'));
     assert.ok(pending.files.some((f: any) => f.path === 'good.md'));

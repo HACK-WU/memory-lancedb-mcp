@@ -102,6 +102,109 @@ function output(result: Record<string, unknown>): void {
   console.log(JSON.stringify(result, null, 2));
 }
 
+function fail(result: Record<string, unknown>): never {
+  output({ ok: false, ...result });
+  process.exit(1);
+}
+
+function buildSourceDirError(sourceDir: string): Record<string, unknown> {
+  return {
+    error: `source 目录不存在或不是目录：${sourceDir}`,
+    hint: '`--source` 需要传外部 Markdown 知识库的根目录，而不是 `knowledge-index/kb/{scope}` 这样的运行时数据目录。',
+    next_step: [
+      '1. 检查传入路径是否真实存在，并确认它是一个目录',
+      '2. 确认该目录下包含待扫描的 `.md` 文件',
+      '3. 重新执行：npx jiti knowledge-index/scripts/scan-kb.ts scan --scope <scope> --source <dir> --root-name <name>',
+    ],
+    possible_causes: [
+      '路径写错，或目录尚未创建',
+      '把 `kb/{scope}` 误当成 `--source` 传入',
+      '传入的是单个文件路径而不是目录路径',
+    ],
+  };
+}
+
+function buildMissingPendingError(scope: string, pendingPath: string): Record<string, unknown> {
+  return {
+    error: `scan-pending.json 不存在：${pendingPath}`,
+    hint: '`scan --results` 只能合并已经准备好的待处理列表。请先执行一次不带 `--results` 的 `scan`，生成 `scan-pending.json` 后再重试。',
+    next_step: [
+      `1. 先执行：npx jiti knowledge-index/scripts/scan-kb.ts scan --scope ${scope} --source <dir> --root-name <name>`,
+      `2. 再执行：npx jiti knowledge-index/scripts/scan-kb.ts scan --scope ${scope} --source <dir> --root-name <name> --results <ai-results.json>`,
+    ],
+    possible_causes: [
+      '还没有执行第一步扫描准备，只直接执行了 `scan --results`',
+      '之前生成的 `scan-pending.json` 已被删除或清理',
+      '这次使用的 `--scope` 与上一次扫描准备时不一致',
+    ],
+  };
+}
+
+function buildMissingResultsFileError(resultsFile: string): Record<string, unknown> {
+  return {
+    error: `results 文件不存在：${resultsFile}`,
+    hint: '`--results` 需要传 AI 生成的结果 JSON 文件路径。该文件至少应包含 `entries` 数组，每一项含 `path`、`summary`、`keywords`。',
+    example: {
+      entries: [
+        {
+          path: 'docs/api.md',
+          summary: 'API 文档摘要',
+          keywords: ['API', '接口', '认证'],
+          enriched: false,
+        },
+      ],
+    },
+    next_step: [
+      '1. 确认 AI 结果文件已经生成到本地',
+      '2. 检查 `--results` 传入的是正确的 JSON 文件路径',
+      '3. 修正后重新执行 `scan --results`',
+    ],
+  };
+}
+
+function buildMissingScanIndexError(scope: string, target: string, currentCommand: string): Record<string, unknown> {
+  const defaultPath = getScanIndexPath(scope);
+  const possibleCauses = [
+    '只执行了 `scan` 生成 `scan-pending.json`，但还没有执行 `scan --results` 合并摘要结果',
+    '`scan-index.json` 被删除，或者当前 `--scope` 与之前生成索引时不一致',
+  ];
+
+  if (target !== defaultPath) {
+    possibleCauses.push('你在扫描阶段可能使用了自定义输出路径，因此这里也需要通过 `--scan-index` 指向同一个文件');
+  }
+
+  return {
+    error: `scan-index.json 不存在：${target}`,
+    hint: `${currentCommand} 只能读取已有的 \`scan-index.json\`。请先执行 \`scan --results\` 合并 AI 摘要结果，生成扫描索引后再重试。`,
+    next_step: [
+      `1. 先执行：npx jiti knowledge-index/scripts/scan-kb.ts scan --scope ${scope} --source <dir> --root-name <name>`,
+      `2. 再执行：npx jiti knowledge-index/scripts/scan-kb.ts scan --scope ${scope} --source <dir> --root-name <name> --results <ai-results.json>`,
+      `3. 最后执行：${currentCommand}`,
+    ],
+    possible_causes: possibleCauses,
+  };
+}
+
+function buildMissingCompleteFileError(completeFile: string): Record<string, unknown> {
+  return {
+    error: `complete 文件不存在：${completeFile}`,
+    hint: '`--complete` 需要传入向量化完成结果文件，用来回写每个条目的 `memoryId` 与完成状态。',
+    example: {
+      entries: [
+        {
+          path: 'docs/api.md',
+          memoryId: 'mem_xxx',
+        },
+      ],
+    },
+    next_step: [
+      '1. 先完成摘要向量化，并整理出结果 JSON',
+      '2. 确认 `--complete` 指向正确的文件路径',
+      '3. 重新执行 `vectorize --complete` 完成回写',
+    ],
+  };
+}
+
 function toPosix(input: string): string {
   return input.split(path.sep).join('/');
 }
@@ -433,13 +536,11 @@ function handleScanPrepare(scope: string, sourceDir: string, rootName: string, o
 function handleScanMerge(scope: string, sourceDir: string, rootName: string, resultsFile: string, outputFile?: string): void {
   const pendingPath = getPendingPath(scope);
   if (!fs.existsSync(pendingPath)) {
-    output({ ok: false, error: `scan-pending.json 不存在：${pendingPath}` });
-    process.exit(1);
+    fail(buildMissingPendingError(scope, pendingPath));
   }
 
   if (!fs.existsSync(resultsFile)) {
-    output({ ok: false, error: `results 文件不存在：${resultsFile}` });
-    process.exit(1);
+    fail(buildMissingResultsFileError(resultsFile));
   }
 
   const scanIndexPath = outputFile ? path.resolve(outputFile) : getScanIndexPath(scope);
@@ -496,8 +597,10 @@ function handleVectorizeList(scope: string, scanIndexFile?: string): void {
   const target = scanIndexFile ? path.resolve(scanIndexFile) : getScanIndexPath(scope);
   const scanIndex = readJson<ScanIndex>(target);
   if (!scanIndex) {
-    output({ ok: false, error: `scan-index.json 不存在：${target}` });
-    process.exit(1);
+    const command = scanIndexFile
+      ? `npx jiti knowledge-index/scripts/scan-kb.ts vectorize --scope ${scope} --scan-index ${path.resolve(scanIndexFile)}`
+      : `npx jiti knowledge-index/scripts/scan-kb.ts vectorize --scope ${scope}`;
+    fail(buildMissingScanIndexError(scope, target, command));
   }
 
   const entries = scanIndex.entries
@@ -520,15 +623,16 @@ function handleVectorizeList(scope: string, scanIndexFile?: string): void {
 
 function handleVectorizeComplete(scope: string, completeFile: string, scanIndexFile?: string): void {
   if (!fs.existsSync(completeFile)) {
-    output({ ok: false, error: `complete 文件不存在：${completeFile}` });
-    process.exit(1);
+    fail(buildMissingCompleteFileError(completeFile));
   }
 
   const target = scanIndexFile ? path.resolve(scanIndexFile) : getScanIndexPath(scope);
   const scanIndex = readJson<ScanIndex>(target);
   if (!scanIndex) {
-    output({ ok: false, error: `scan-index.json 不存在：${target}` });
-    process.exit(1);
+    const command = scanIndexFile
+      ? `npx jiti knowledge-index/scripts/scan-kb.ts vectorize --scope ${scope} --scan-index ${path.resolve(scanIndexFile)} --complete ${completeFile}`
+      : `npx jiti knowledge-index/scripts/scan-kb.ts vectorize --scope ${scope} --complete ${completeFile}`;
+    fail(buildMissingScanIndexError(scope, target, command));
   }
 
   const payload = JSON.parse(fs.readFileSync(completeFile, 'utf-8')) as VectorizeCompletePayload;
@@ -595,8 +699,7 @@ program
       ensureScopeDir(scope);
 
       if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
-        output({ ok: false, error: `source 目录不存在或不是目录：${sourceDir}` });
-        process.exit(1);
+        fail(buildSourceDirError(sourceDir));
       }
 
       if (!rootName) {
