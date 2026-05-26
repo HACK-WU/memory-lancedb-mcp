@@ -110,22 +110,7 @@ npx jiti knowledge-index/scripts/scan-kb.ts scan \
 
 ## 第二步：合并 AI 摘要结果
 
-在 AI 根据 `scan-pending.json` 生成摘要和关键词后，执行：
-
-```bash
-npx jiti knowledge-index/scripts/scan-kb.ts scan \
-  --scope mcp-test \
-  --source ./external-kb \
-  --root-name wiki \
-  --results ./ai-results.json
-```
-
-这一步会：
-
-- 读取 `scan-pending.json`
-- 读取 `--results` 指向的 AI 结果文件
-- 合并为 `scan-index.json`
-- 记录每个条目的 `summary`、`keywords`、`memoryId`、`vectorized`
+由 AI 根据 `scan-pending.json` 生成摘要和关键词，输出为 `ai-results.json`：
 
 ### AI 结果文件格式
 
@@ -141,6 +126,30 @@ npx jiti knowledge-index/scripts/scan-kb.ts scan \
   ]
 }
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `path` | string | 对应 `scan-pending.json` 中 `files[].path`，用于匹配 |
+| `summary` | string | 3~5 句总结性描述，最后一行建议包含 `[路径] {relativePath}` |
+| `keywords` | string[] | 自然语言关键词，禁止代码符号（类名、方法名、路径等） |
+| `enriched` | boolean | 是否读取了文件内容头部来丰富摘要 |
+
+准备好 `ai-results.json` 后，执行合并：
+
+```bash
+npx jiti knowledge-index/scripts/scan-kb.ts scan \
+  --scope mcp-test \
+  --source ./external-kb \
+  --root-name wiki \
+  --results ./ai-results.json
+```
+
+这一步会：
+
+- 读取 `scan-pending.json`
+- 读取 `--results` 指向的 AI 结果文件
+- 合并为 `scan-index.json`
+- 记录每个条目的 `summary`、`keywords`、`memoryId`、`vectorized`
 
 ### 合并后的 `scan-index.json` 会保存什么
 
