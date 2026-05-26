@@ -87,11 +87,26 @@ npx jiti knowledge-index/scripts/scan-kb.ts scan \
 
 核心字段包括：
 
-- `files[].path`：相对 `--source` 的路径
-- `files[].filename`：去掉 `.md` 后的文件名
-- `files[].dir`：所属目录
-- `files[].changeType`：`A` / `M`
-- `deleted[]`：增量扫描中发现被删除的文件
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `scope` | string | 当前 scope 名称 |
+| `rootName` | string | 导入根节点名称 |
+| `sourceDir` | string | 外部知识库源目录绝对路径 |
+| `mode` | `'full' \| 'incremental'` | 本次扫描模式 |
+| `lastScannedCommit` | string \| null | 上次扫描的 git commit（增量扫描起点） |
+| `currentCommit` | string \| null | 当前 HEAD commit |
+| `files[].path` | string | 相对于 sourceDir 的文件相对路径（如 `"监控/告警中心/告警规则CRUD流程.md"`） |
+| `files[].filename` | string | 去掉 `.md` 后的文件名（如 `"告警规则CRUD流程"`） |
+| `files[].dir` | string | 相对于 sourceDir 的目录路径（如 `"监控/告警中心"`） |
+| `files[].changeType` | `'A' \| 'M'` | A=新增，M=修改（增量扫描时） |
+| `files[].needsEnrichment` | boolean | 是否需要读取文件内容头部来丰富摘要 |
+| `files[].content` | string \| null | 文件内容头部（needsEnrichment=true 时填充） |
+| `files[].previousMemoryId` | string \| null | M 类变更时，旧摘要的 memoryId（用于覆盖写入） |
+| `deleted[].path` | string | 被删除文件的相对路径 |
+| `deleted[].memoryId` | string \| null | 旧摘要的 memoryId（用于 memory_forget） |
+| `deleted[].fullPath` | string | 含根节点前缀的完整 Group 路径 |
+
+> **注意**：`scan-pending.json` 是临时文件，`scan --results` 合并完成后可删除。如果误删，只需重新执行 `scan` 即可重新生成。
 
 ## 第二步：合并 AI 摘要结果
 
@@ -131,18 +146,22 @@ npx jiti knowledge-index/scripts/scan-kb.ts scan \
 
 每条记录至少包含：
 
-- `path`
-- `fullPath`
-- `summary`
-- `keywords`
-- `enriched`
-- `vectorized`
-- `memoryId`
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `path` | string | 相对于 sourceDir 的文件相对路径，import-kb.ts 通过此字段匹配 |
+| `fullPath` | string | 含根节点前缀的完整 Group 路径（如 `"wiki/监控/告警中心/告警规则CRUD流程"`） |
+| `summary` | string | 3~5 句总结性描述，最后一行必须包含 `[路径] {relativePath}` |
+| `keywords` | string[] | 自然语言关键词，禁止代码符号 |
+| `enriched` | boolean | 是否读取了文件内容头部来丰富摘要 |
+| `vectorized` | boolean | 向量化状态：`false`=未向量化，`true`=已向量化 |
+| `memoryId` | string \| null | 记忆系统中的记录 ID，用于增量覆盖和删除清理 |
 
 其中：
 
 - `vectorized: false` 表示还没完成摘要向量化
 - `memoryId` 用于和父项目记忆系统中的条目建立映射
+
+> **重要**：`scan-index.json` 是增量扫描的核心依据。它记录了 `lastScannedCommit`（增量扫描起点）、`vectorized`/`memoryId`（向量化状态追踪）。删除此文件会导致：退化为全量扫描、已向量化摘要无法清理（缺少 memoryId）、重复向量化。
 
 ## 第三步：列出待向量化条目
 

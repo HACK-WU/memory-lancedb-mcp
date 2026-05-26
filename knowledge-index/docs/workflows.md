@@ -276,3 +276,28 @@ npx jiti knowledge-index/scripts/import-kb.ts \
 - `scan-kb` 详细说明：[`scan-kb.md`](./scan-kb.md)
 - 外部导入说明：[`import-kb.md`](./import-kb.md)
 - 异常与恢复：[`error-handling.md`](./error-handling.md)
+- 架构与数据文件关系：[`architecture.md`](./architecture.md)
+
+## 附录：数据文件关系速查
+
+`kb/{scope}/` 下的核心文件关系：
+
+```
+外部 docs/ 目录
+    ↓ scan
+scan-pending.json   ← 临时断点，记录待 AI 处理文件
+    ↓ AI 摘要 + scan --results
+scan-index.json     ← 持久账本，记录摘要/关键词/向量化状态
+    ↓ vectorize + import-kb
+group-index.json    ← Group 树结构
+relations-cache.json ← Relation 缓存（评分/淘汰/词云）
+kb/{scope}/{group}/index.json  ← 本地 KB 原文
+```
+
+| 文件 | 删除后果 |
+|------|---------|
+| `group-index.json` | Group 树丢失，需从备份恢复或重建 |
+| `relations-cache.json` | Relation 缓存丢失，评分/词云归零，可重新导入恢复 |
+| `scan-index.json` | 退化为全量扫描、重复向量化、无法清理旧记忆 |
+| `scan-pending.json` | 无严重影响，重新执行 `scan` 即可 |
+| `{group}/index.json` | 该 Group 下原文丢失，需重新 sync-relation 或 import-kb |

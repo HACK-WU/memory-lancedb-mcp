@@ -39,16 +39,50 @@ flowchart LR
     GI["group-index.json<br/>Group 树索引"]
     RC["relations-cache.json<br/>Relation 热点缓存 / 关键词 / 分区"]
     KB["kb/<scope>/<group>/index.json<br/>本地 KB 原文"]
+    SI["scan-index.json<br/>外部知识库扫描状态账本"]
+    SP["scan-pending.json<br/>扫描断点（临时）"]
 
     GI --> RC
     RC --> KB
+    SI --> RC
+    SP --> SI
 ```
+
+### 五个核心文件
+
+| 文件 | 角色 | 读写方 | 生命周期 |
+|------|------|--------|---------|
+| `group-index.json` | Group 树结构索引，负责树形导航 | 所有脚本读写 | 永久，随 Group 增删改 |
+| `relations-cache.json` | Relation 缓存（评分/淘汰/词云），负责本地快速路径 | 所有脚本读写 | 永久，随 Relation 使用动态更新 |
+| `kb/{scope}/{group}/index.json` | 本地 KB 原文，负责最终交付 | get-module-info 读，sync-relation/import-kb 写 | 永久，随知识沉淀积累 |
+| `scan-index.json` | 外部知识库扫描状态账本 | scan-kb / import-kb 读写 | 永久，增量扫描依赖 `lastScannedCommit` |
+| `scan-pending.json` | 扫描断点（待处理文件列表） | scan-kb 写，AI 读 | 临时，merge 后可删除 |
 
 ### 三层作用
 
 - **`group-index.json`**：负责树形导航，描述有哪些 Group，以及 Group 的父子关系
 - **`relations-cache.json`**：负责本地快速路径，缓存热门 Relation、关键词和冷热分区
 - **`kb/{scope}/{group}/index.json`**：负责最终交付，保存可直接供 AI 使用的 Markdown 原文
+
+### `index.json` 的 key 因写入来源不同而异
+
+> **重要**：本地 KB 的 `index.json` 是一个 `{ [key: string]: markdown }` 结构，key 的值取决于谁写入的：
+
+| 写入脚本 | key 来源 | 示例 |
+|---------|---------|------|
+| `import-kb.ts` | 文件名去 `.md` 扩展名 | `"多项目隔离"` |
+| `sync-relation.ts` | `--relation` 参数原文 | `"标签系统"` |
+
+这意味着：**导入外部知识库时，`relations-cache.json` 中的 `Relation.text` 与 `index.json` 的 key 一致，都是文件名风格**（如 `"多项目隔离"`），而不是语义描述（如 `"多项目隔离机制文档，详细阐述Scope概念与ACL隔离原理..."`）。
+
+### `scan-index.json` 与 `scan-pending.json` 的关系
+
+两者通过 `path` 字段关联，但角色截然不同：
+
+- **`scan-pending.json`**：中间产物，记录"待处理"状态。AI 根据 `files[]` 列表生成摘要+关键词后，通过 `scan --results` 合并到 `scan-index.json`
+- **`scan-index.json`**：持久状态账本，记录"已处理"结果。包含 `vectorized`/`memoryId` 状态，是增量扫描和向量化流程的核心依据
+
+删除 `scan-index.json` 会导致：退化为全量扫描、已向量化摘要无法清理（缺少 memoryId）、重复向量化。删除 `scan-pending.json` 仅需重新执行 `scan` 即可恢复。
 
 ## 运行时主链路
 
@@ -93,8 +127,9 @@ flowchart TD
 ```mermaid
 flowchart LR
     EXT[外部 Markdown 知识库] --> SCAN[scan-kb scan<br/>生成待处理文件列表]
-    SCAN --> AI[AI 生成摘要 + 关键词]
-    AI --> IDX[scan-index.json]
+    SCAN --> SP[scan-pending.json<br/>待 AI 处理文件列表]
+    SP --> AI[AI 生成摘要 + 关键词]
+    AI --> IDX[scan-index.json<br/>持久状态账本]
     IDX --> VEC[memory_store<br/>摘要向量化进入记忆系统]
     IDX --> IMP[import-kb<br/>原文导入本地索引]
     IMP --> KB[本地 KB + Group 树 + Relation 缓存]

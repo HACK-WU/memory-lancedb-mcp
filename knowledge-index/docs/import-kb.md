@@ -67,6 +67,17 @@ npx jiti knowledge-index/scripts/import-kb.ts \
 - `wiki/API` → `登录`
 - `wiki/运维` → `发布流程`
 
+### 导入后 `index.json` 的 key 是文件名，不是语义描述
+
+约定模式下，`import-kb.ts` 将文件名去 `.md` 后同时写入两个位置：
+
+1. `relations-cache.json` 的 `Relation.text`（如 `"登录"`）
+2. `kb/{scope}/{group}/index.json` 的 key（如 `"登录"`）
+
+也就是说，**导入场景下 `index.json` 的 key 是文件名风格**，而非语义描述（如 `"用户登录接口"`）。这与 `sync-relation.ts` 的行为不同——后者使用 `--relation` 参数原文作为 key，通常是语义描述。
+
+> 如果你在 `get-module-info.ts` 中用 `--relation` 查询导入的知识，传入的值应与 `Relation.text` 一致（即文件名），而非摘要内容。
+
 ## 配置模式如何工作
 
 如果传入 `--mapping`，脚本会按照 JSON 文件里的显式定义导入。

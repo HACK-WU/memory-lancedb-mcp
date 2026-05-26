@@ -209,6 +209,15 @@ kb/
 }
 ```
 
+**index.json 的 key 因写入来源不同而异**：
+
+| 写入脚本 | key 来源 | 示例 | 说明 |
+|---------|---------|------|------|
+| `import-kb.ts` | 文件名去扩展名 | `"告警规则CRUD流程"` | 外部知识库导入时，key = `stripMarkdownExtension(basename(relativePath))`，即文件名去掉 `.md` |
+| `sync-relation.ts` | `--relation` 参数原文 | `"标签系统"` | Agent 自建知识时，key = 用户/AI 提供的 Relation 语义描述 |
+
+> **重要**：当导入外部知识库时，`relations-cache.json` 中的 `Relation.text` 与 `index.json` 的 key 一致，都是文件名风格（如 `"多项目隔离"`），而非语义描述（如 `"多项目隔离机制文档，详细阐述Scope概念与ACL隔离原理..."`）。这是因为 `import-kb.ts` 将 `relationText` 同时写入了 `Relation.text` 和 `index.json[key]`。
+
 ## 6. 扫描索引文件
 
 文件路径：`kb/{scope}/scan-index.json`
@@ -277,7 +286,117 @@ kb/
 3. 使用 WAL 写入 scan-index.json（临时文件→原子 rename）
 4. 如果 scan-index.json 写入失败，下次 vectorize 时该条目仍为 `false`，会重复调用 memory_store（幂等，记忆系统覆盖写入即可）
 
-## 7. 代码定位符格式
+## 7. 扫描断点文件
+
+文件路径：`kb/{scope}/scan-pending.json`
+
+由 `scan-kb.ts scan` 子命令生成，是扫描步骤的**断点保存点**。将5步导入流程（scan → AI摘要 → merge → vectorize → import）拆开，AI 生成摘要中断后可从 pending 重试，无需重新扫描目录。
+
+```json
+{
+  "scope": "project-a",
+  "rootName": "wiki",
+  "sourceDir": "./docs",
+  "mode": "full",
+  "lastScannedCommit": null,
+  "currentCommit": "a1b2c3d",
+  "files": [
+    {
+      "path": "监控/告警中心/告警规则CRUD流程.md",
+      "filename": "告警规则CRUD流程",
+      "dir": "监控/告警中心",
+      "changeType": "A",
+      "needsEnrichment": false,
+      "content": null
+    }
+  ],
+  "deleted": [
+    {
+      "path": "废弃文档.md",
+      "memoryId": "mem_old123",
+      "fullPath": "wiki/废弃文档"
+    }
+  ]
+}
+```
+
+**字段说明**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `scope` | string | 当前 scope 名称 |
+| `rootName` | string | 导入根节点名称 |
+| `sourceDir` | string | 外部知识库源目录绝对路径 |
+| `mode` | `'full' \| 'incremental'` | 本次扫描模式：全量 or 增量 |
+| `lastScannedCommit` | string \| null | 上次扫描的 git commit（增量扫描起点） |
+| `currentCommit` | string \| null | 当前 HEAD commit |
+| `files` | PendingFile[] | 待 AI 处理的文件列表 |
+| `files[].path` | string | 相对于 sourceDir 的文件相对路径 |
+| `files[].filename` | string | 文件名（去 .md 扩展名） |
+| `files[].dir` | string | 相对于 sourceDir 的目录路径 |
+| `files[].changeType` | `'A' \| 'M'` | A=新增，M=修改（增量扫描时） |
+| `files[].needsEnrichment` | boolean | 是否需要读取文件内容头部来丰富摘要 |
+| `files[].content` | string \| null | 文件内容头部（needsEnrichment=true 时填充） |
+| `files[].previousMemoryId` | string \| null | M 类变更时，旧摘要的 memoryId（用于覆盖写入） |
+| `deleted` | PendingDeleted[] | 待删除的文件列表（增量扫描 D 类变更） |
+| `deleted[].path` | string | 被删除文件的相对路径 |
+| `deleted[].memoryId` | string \| null | 旧摘要的 memoryId（用于 memory_forget） |
+| `deleted[].fullPath` | string | 含根节点前缀的完整 Group 路径 |
+
+**生命周期**：
+1. `scan-kb scan` 生成此文件并输出文件列表到 stdout
+2. AI Agent 为每个文件生成摘要 + 关键词，写入 results JSON
+3. `scan-kb merge` 将 AI 结果合并到 `scan-index.json`
+4. 合并成功后 `scan-pending.json` 可删除（或留作记录）
+
+**与 scan-index.json 的关系**：`scan-pending.json` 是中间产物，记录"待处理"状态；`scan-index.json` 是持久状态账本，记录"已处理"结果（含向量化状态）。两者通过 `path` 字段关联。
+
+## 8. 四文件关系总览
+
+`kb/{scope}/` 下的四个核心文件各司其职，协同支撑知识索引系统的运行：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    外部知识库导入流程                          │
+│                                                             │
+│  scan-pending.json ──AI摘要──→ scan-index.json              │
+│  (待处理文件列表)               (持久状态账本)                │
+│       ↑ scan                        ↓ vectorize/import       │
+│       │                              ↓                       │
+│  外部 docs/ 目录              ┌──────────────────┐           │
+│                              │ group-index.json  │           │
+│                              │ (Group 树结构)    │           │
+│                              │ relations-cache   │           │
+│                              │ .json (Relation   │           │
+│                              │  缓存+评分+词云)  │           │
+│                              └──────────────────┘           │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                    运行时查询流程                             │
+│                                                             │
+│  group-index.json → 定位 Group 路径                         │
+│       ↓                                                     │
+│  relations-cache.json → 查找热门 Relation / 词云关键词       │
+│       ↓                                                     │
+│  本地 KB index.json → 读取完整原文                           │
+│  或 memory_recall → 语义检索摘要                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| 文件 | 角色 | 读写方 | 生命周期 |
+|------|------|--------|---------|
+| `group-index.json` | Group 树结构索引 | 所有脚本读写 | 永久，随 Group 增删改 |
+| `relations-cache.json` | Relation 缓存（评分/淘汰/词云） | 所有脚本读写 | 永久，随 Relation 使用动态更新 |
+| `scan-index.json` | 外部知识库扫描状态账本 | scan-kb / import-kb 读写 | 永久，增量扫描依赖 `lastScannedCommit` |
+| `scan-pending.json` | 扫描断点（待处理文件列表） | scan-kb 写，AI 读 | 临时，merge 后可删除 |
+
+**关键差异**：
+- `relations-cache.json` 的 `Relation.text` 在**导入场景**下是文件名风格（如 `"多项目隔离"`），在**自建场景**下是语义描述（如 `"标签系统"`）
+- `scan-index.json` 是增量扫描的核心依据（含 `lastScannedCommit`、`vectorized`、`memoryId`），删除后会导致退化为全量扫描、重复向量化等问题
+- `scan-pending.json` 仅在导入流程中使用，运行时查询不依赖此文件
+
+## 9. 代码定位符格式
 
 代码定位符用于在模块信息中精确标注源码位置。
 
@@ -303,7 +422,7 @@ kb/
 - 代码定位符写在 Markdown 正文中（如 `## 关键模块` 章节），而非单独字段
 - 关键词中禁止使用代码符号
 
-## 8. 约束
+## 10. 约束
 
 | 约束项 | 规则 |
 |--------|------|
