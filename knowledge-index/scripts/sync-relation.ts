@@ -29,7 +29,7 @@ import { DEFAULT_PARTITION_CONFIG } from './lib/constants.js';
 
 interface GroupData {
   hot_relations: Relation[];
-  word_cloud_keywords: string[];
+  keywords: string[];
   max_hot_count: number;
 }
 
@@ -152,7 +152,7 @@ function syncSingleRelation(
   if (!cache.groups[group]) {
     cache.groups[group] = {
       hot_relations: [],
-      word_cloud_keywords: [],
+      keywords: [],
       max_hot_count: config.maxHotCount,
     };
   }
@@ -164,9 +164,6 @@ function syncSingleRelation(
   const now = Date.now();
 
   if (existingRel) {
-    // 更新已有关键词（合并去重）
-    const mergedKw = new Set([...existingRel.keywords, ...validKeywords]);
-    existingRel.keywords = [...mergedKw];
     // 将重复同步记为一次使用（受 5min 防刷限制），
     // 以保证 lastUsedTime 能反映最近一次同步，供后续 query-group 计入新兴热区。
     const updated = recordUse(existingRel, now);
@@ -188,7 +185,6 @@ function syncSingleRelation(
       score: calculateScore(0, null, now, config.halfLifeHours),
       useCount: 0,
       lastUsedTime: null,
-      keywords: validKeywords,
       isImported: false,
     };
 
@@ -205,20 +201,7 @@ function syncSingleRelation(
       const evictedRel = groupData.hot_relations[minIdx];
       evicted = evictedRel.text;
 
-      // 淘汰 Relation 的关键词退化为 word_cloud_keywords
-      for (const kw of evictedRel.keywords) {
-        if (!groupData.word_cloud_keywords.includes(kw)) {
-          groupData.word_cloud_keywords.push(kw);
-        }
-      }
-
-      // 截断关键词上限：淘汰最早的（头部），保留最新的（尾部）
-      if (groupData.word_cloud_keywords.length > config.maxKeywordCount) {
-        const overflow = groupData.word_cloud_keywords.length - config.maxKeywordCount;
-        groupData.word_cloud_keywords.splice(0, overflow);
-      }
-
-      // 移除被淘汰的 Relation
+      // 淘汰时直接移除，不再搬运 keywords（keywords 已在 Group 级）
       groupData.hot_relations.splice(minIdx, 1);
     }
 
@@ -229,7 +212,18 @@ function syncSingleRelation(
     groupData.hot_relations.sort((a, b) => b.score - a.score);
   }
 
-  // 6. 写入本地 KB
+  // 6. 合并 validKeywords 到 Group.keywords（去重 + FIFO 截断）
+  for (const kw of validKeywords) {
+    if (!groupData.keywords.includes(kw)) {
+      groupData.keywords.push(kw);
+    }
+  }
+  if (groupData.keywords.length > config.maxKeywordCount) {
+    const overflow = groupData.keywords.length - config.maxKeywordCount;
+    groupData.keywords.splice(0, overflow);
+  }
+
+  // 7. 写入本地 KB
   const localKbPath = getLocalKbDir(scope, group);
   const localKbDir = path.dirname(localKbPath);
   fs.mkdirSync(localKbDir, { recursive: true });

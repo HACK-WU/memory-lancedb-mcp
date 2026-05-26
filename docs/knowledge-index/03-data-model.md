@@ -114,7 +114,6 @@
           "score": 5.2,
           "useCount": 8,
           "lastUsedTime": 1716458400000,
-          "keywords": ["规则", "阈值", "触发条件"],
           "isImported": false
         },
         {
@@ -123,11 +122,10 @@
           "score": 3.8,
           "useCount": 5,
           "lastUsedTime": 1716454800000,
-          "keywords": ["邮件", "短信", "渠道"],
           "isImported": false
         }
       ],
-      "word_cloud_keywords": ["静默", "聚合", "升级", "值班表", "分级"],
+      "keywords": ["规则", "阈值", "触发条件", "邮件", "短信", "渠道", "静默", "聚合", "升级", "值班表", "分级"],
       "max_hot_count": 10
     },
     "wiki/监控/告警中心": {
@@ -138,11 +136,10 @@
           "score": 0,
           "useCount": 0,
           "lastUsedTime": null,
-          "keywords": ["规则", "阈值", "CRUD", "触发条件"],
           "isImported": true
         }
       ],
-      "word_cloud_keywords": [],
+      "keywords": ["规则", "阈值", "CRUD", "触发条件"],
       "max_hot_count": 10
     }
   },
@@ -166,8 +163,8 @@
 - `useCount`：有效使用次数（5分钟防刷间隔）
 - `lastUsedTime`：最后使用时间戳
 - `isImported: true` 的 Relation：score=0、useCount=0、不参与评分淘汰、不参与新兴热区（**评审改进：新兴热区过滤导入知识**）
-- 当 `hot_relations` 达到 `max_hot_count` 上限且有新 Relation 加入时，淘汰 score 最低的 Relation → 提取 keywords 合并到 `word_cloud_keywords`
-- `word_cloud_keywords` 自动去重，上限 `maxKeywordCount`
+- 当 `hot_relations` 达到 `max_hot_count` 上限且有新 Relation 加入时，淘汰 score 最低的 Relation（keywords 已在 Group 级，无需搬运）
+- `keywords` 自动去重，上限 `maxKeywordCount`，超限 FIFO 截断
 
 ## 5. 本地 KB 目录结构
 

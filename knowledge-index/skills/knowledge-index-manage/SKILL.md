@@ -197,9 +197,9 @@ npx jiti knowledge-index/scripts/query-group.ts --scope <scope> --groups <group>
 {
   "group": "设计文档/API",
   "hot_relations": [
-    { "id": "rel_001", "text": "用户登录", "score": 8.5, "keywords": ["登录", "认证"] }
+    { "id": "rel_001", "text": "用户登录", "score": 8.5 }
   ],
-  "word_cloud_keywords": ["登录", "认证", "token", "注册", "验证"]
+  "keywords": ["登录", "认证", "token", "注册", "验证"]
 }
 ```
 

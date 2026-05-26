@@ -30,7 +30,7 @@ interface GroupIndex {
 
 interface GroupData {
   hot_relations: Relation[];
-  word_cloud_keywords: string[];
+  keywords: string[];
   max_hot_count: number;
 }
 
@@ -197,7 +197,7 @@ function ensureCacheGroup(cache: RelationsCache, groupPath: string): GroupData {
   if (!cache.groups[groupPath]) {
     cache.groups[groupPath] = {
       hot_relations: [],
-      word_cloud_keywords: [],
+      keywords: [],
       max_hot_count: (cache.partition_config || DEFAULT_PARTITION_CONFIG).maxHotCount,
     };
   }
@@ -225,26 +225,40 @@ function upsertImportedRelation(
 ): void {
   const groupData = ensureCacheGroup(cache, groupPath);
   const existing = groupData.hot_relations.find((item) => item.text === relationText);
-  const uniqueKeywords = [...new Set((keywords || []).map((kw) => kw.trim()).filter(Boolean))];
 
   if (existing) {
-    existing.keywords = uniqueKeywords;
     existing.isImported = true;
     existing.score = 0;
     existing.useCount = 0;
     existing.lastUsedTime = null;
-    return;
+  } else {
+    groupData.hot_relations.push({
+      id: generateNextId(cache),
+      text: relationText,
+      score: 0,
+      useCount: 0,
+      lastUsedTime: null,
+      isImported: true,
+    });
   }
 
-  groupData.hot_relations.push({
-    id: generateNextId(cache),
-    text: relationText,
-    score: 0,
-    useCount: 0,
-    lastUsedTime: null,
-    keywords: uniqueKeywords,
-    isImported: true,
-  });
+  // keywords 合并去重到 Group 级
+  const uniqueKeywords = [...new Set((keywords || []).map((kw) => kw.trim()).filter(Boolean))];
+  for (const kw of uniqueKeywords) {
+    if (!groupData.keywords.includes(kw)) {
+      groupData.keywords.push(kw);
+    }
+  }
+  // FIFO 截断
+  const maxKw = (cache.partition_config || DEFAULT_PARTITION_CONFIG).maxKeywordCount;
+  if (groupData.keywords.length > maxKw) {
+    groupData.keywords.splice(0, groupData.keywords.length - maxKw);
+  }
+
+  // 清理旧格式残留字段（重构后 word_cloud_keywords 不再使用）
+  if ('word_cloud_keywords' in groupData) {
+    delete (groupData as Record<string, unknown>).word_cloud_keywords;
+  }
 }
 
 function loadLocalKb(localKbPath: string): Record<string, unknown> {

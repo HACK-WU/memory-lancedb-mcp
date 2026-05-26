@@ -313,7 +313,7 @@ function formatRelationsForAgent(scope, group, relationsData, options = {}) {
   // 关键词词云
   if (show === 'all' || show === 'keywords') {
     if (keywordLimit > 0) {
-      output += formatKeywords(relationsData.word_cloud_keywords, keywordLimit, partition, mode);
+      output += formatKeywords(relationsData.keywords, keywordLimit, partition, mode);
     }
   }
   

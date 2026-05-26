@@ -65,11 +65,10 @@ before(async () => {
         score: 5.0,
         useCount: 3,
         lastUsedTime: Date.now() - 3600000, // 1小时前
-        keywords: ['规则', '阈值'],
         isImported: false,
       },
     ],
-    word_cloud_keywords: ['静默', '聚合'],
+    keywords: ['规则', '阈值', '静默', '聚合'],
     max_hot_count: 10,
   };
   writeJson(cachePath, cache);

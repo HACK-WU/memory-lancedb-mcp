@@ -94,7 +94,7 @@
 
 | 步骤 | 操作 | 验证 |
 |------|------|------|
-| 1 | query-group 获取词云 | 返回 word_cloud_keywords |
+| 1 | query-group 获取词云 | 返回 Group.keywords |
 | 2 | AI 组装关键词调用 memory_recall | 需要 MCP 服务可用 |
 | 3 | sync-relation 回写 | Relation 写入缓存 + 本地 KB |
 

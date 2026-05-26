@@ -32,7 +32,7 @@ interface GroupIndex {
 
 interface GroupData {
   hot_relations: Relation[];
-  word_cloud_keywords: string[];
+  keywords: string[];
   max_hot_count: number;
 }
 
@@ -497,11 +497,7 @@ function formatGroupRelations(
     const top = partition.hot.slice(0, hotCount);
     top.forEach((rel) => lines.push(`├── ${rel.text}`));
     lines.push('');
-    const allKw = [
-      ...data.word_cloud_keywords,
-      ...relations.flatMap((r) => r.keywords),
-    ];
-    lines.push(`关键词: ${[...new Set(allKw)].join(', ')}`);
+    lines.push(`关键词: ${data.keywords.join(', ')}`);
     return lines.join('\n');
   }
 
@@ -521,27 +517,11 @@ function formatGroupRelations(
     lines.push('');
   }
 
-  // 词云
-  const hotKw = new Set<string>();
-  const warmKw = new Set<string>();
-  for (const rel of partition.hot) rel.keywords.forEach((k) => hotKw.add(k));
-  for (const rel of partition.warm) {
-    rel.keywords.forEach((k) => { if (!hotKw.has(k)) warmKw.add(k); });
-  }
-  const coldKw = data.word_cloud_keywords.filter((k) => !hotKw.has(k) && !warmKw.has(k));
-
-  if (hotKw.size > 0 || warmKw.size > 0 || coldKw.length > 0) {
+  // 词云：keywords 属于 Group 级，无法按 Relation 分区归类热度
+  // 设计决策：接受简化，以换取数据模型清晰（详见 keywords-group-level-refactor_DESIGN §14）
+  if (data.keywords.length > 0) {
     lines.push('🏷️ 关键词词云:');
-    const cloudLines: string[] = [];
-    if (hotKw.size > 0) cloudLines.push(`├── 🔥 ${[...hotKw].join(', ')}`);
-    if (warmKw.size > 0) cloudLines.push(`├── 🌡️ ${[...warmKw].join(', ')}`);
-    if (coldKw.length > 0) cloudLines.push(`└── ❄️ ${coldKw.join(', ')}`);
-    // 修正最后一个 connector
-    if (cloudLines.length > 0) {
-      const lastIdx = cloudLines.length - 1;
-      cloudLines[lastIdx] = cloudLines[lastIdx].replace(/^├──/, '└──');
-    }
-    lines.push(...cloudLines);
+    lines.push(`└── ${data.keywords.join(', ')}`);
   }
 
   return lines.join('\n');

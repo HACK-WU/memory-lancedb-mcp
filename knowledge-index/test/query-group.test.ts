@@ -70,7 +70,6 @@ before(async () => {
           score: 9.6,
           useCount: 10,
           lastUsedTime: now - 360000, // 0.1小时前
-          keywords: ['规则', '阈值', '触发条件'],
           isImported: false,
         },
         {
@@ -79,11 +78,10 @@ before(async () => {
           score: 7.2,
           useCount: 5,
           lastUsedTime: now - 7200000,
-          keywords: ['邮件', '短信', '渠道'],
           isImported: false,
         },
       ],
-      word_cloud_keywords: ['静默', '聚合', '升级'],
+      keywords: ['规则', '阈值', '触发条件', '邮件', '短信', '渠道', '静默', '聚合', '升级'],
       max_hot_count: 10,
     },
     '项目根/监控/日志查询': {
@@ -94,11 +92,10 @@ before(async () => {
           score: 5.5,
           useCount: 8,
           lastUsedTime: now - 1800000,
-          keywords: ['日志', '检索', '查询'],
           isImported: false,
         },
       ],
-      word_cloud_keywords: ['ELK', '索引'],
+      keywords: ['日志', '检索', '查询', 'ELK', '索引'],
       max_hot_count: 10,
     },
     '项目根/部署/前端': {
@@ -109,11 +106,10 @@ before(async () => {
           score: 2.0,
           useCount: 1,
           lastUsedTime: now - 3600000, // 最近使用 → 新兴热区候选
-          keywords: ['构建', '部署', 'CDN'],
           isImported: false,
         },
       ],
-      word_cloud_keywords: ['npm', 'webpack'],
+      keywords: ['构建', '部署', 'CDN', 'npm', 'webpack'],
       max_hot_count: 10,
     },
   };

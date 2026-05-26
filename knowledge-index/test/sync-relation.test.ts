@@ -158,12 +158,15 @@ describe('sync-relation 单条模式', () => {
     // 数量不应增加
     assert.strictEqual(count2, count1);
 
-    // 关键词应合并
-    const rel = cache2.groups['项目根/监控/告警中心'].hot_relations.find(
+    // 关键词应合并到 Group 级
+    const groupData = cache2.groups['项目根/监控/告警中心'];
+    const rel = groupData.hot_relations.find(
       (r: any) => r.text === '聚合策略配置'
     );
-    assert.ok(rel.keywords.includes('聚合'));
-    assert.ok(rel.keywords.includes('时间窗口'));
+    assert.ok(rel);
+    assert.strictEqual(rel.keywords, undefined, 'Relation 不应再含 keywords 字段');
+    assert.ok(groupData.keywords.includes('聚合'));
+    assert.ok(groupData.keywords.includes('时间窗口'));
   });
 });
 
@@ -217,8 +220,15 @@ describe('sync-relation 淘汰逻辑', () => {
       const groupData = updatedCache.groups['项目根/测试'];
       assert.ok(groupData.hot_relations.length <= 2);
 
-      // 淘汰的关键词应进入 word_cloud_keywords
-      assert.ok(groupData.word_cloud_keywords.length > 0);
+      // keywords 已在 Group 级别累积（含 A/B/C 各自的关键词）
+      assert.ok(groupData.keywords.length > 0);
+      assert.ok(groupData.keywords.includes('功能C'));
+      // 确认旧字段已不存在
+      assert.strictEqual(groupData.word_cloud_keywords, undefined);
+      // 确认 Relation 上不再写 keywords
+      for (const rel of groupData.hot_relations) {
+        assert.strictEqual(rel.keywords, undefined);
+      }
     } finally {
       const kbDir = getKbDir(evictionScope);
       if (fs.existsSync(kbDir)) {

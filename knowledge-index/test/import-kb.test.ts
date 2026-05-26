@@ -279,11 +279,14 @@ describe('import-kb 约定模式', () => {
     const { readJson } = await import('../scripts/lib/store.js');
     const { getRelationsCachePath } = await import('../scripts/lib/scope.js');
     const cache = readJson<any>(getRelationsCachePath(scope))!;
-    const rel = cache.groups['wiki/监控/告警中心'].hot_relations.find(
+    const groupData = cache.groups['wiki/监控/告警中心'];
+    const rel = groupData.hot_relations.find(
       (item: any) => item.text === '告警规则CRUD流程'
     );
 
-    assert.deepStrictEqual(rel.keywords, ['规则', '阈值', '静默']);
+    assert.ok(rel);
+    assert.strictEqual(rel.keywords, undefined);
+    assert.deepStrictEqual(groupData.keywords, ['规则', '阈值', '静默']);
   });
 });
 
@@ -410,13 +413,23 @@ describe('import-kb 真实 docs 目录', () => {
 
     for (const [index, item] of keywordEntries.entries()) {
       const groupPath = getGroupPath(rootName, item.relativePath);
-      const relation = cache.groups[groupPath].hot_relations.find(
+      const groupData = cache.groups[groupPath];
+      const relation = groupData.hot_relations.find(
         (entry: any) => entry.text === getRelationText(item.relativePath)
       );
 
       assert.ok(relation);
-      assert.deepStrictEqual(relation.keywords, [`关键词${index + 1}`, getRelationText(item.relativePath)]);
+      assert.strictEqual(relation.keywords, undefined);
       assert.strictEqual(relation.isImported, true);
+
+      // keywords 在 Group 级，应包含 scan-index 中此文件的两个 keywords
+      const expectedKw = [`关键词${index + 1}`, getRelationText(item.relativePath)];
+      for (const kw of expectedKw) {
+        assert.ok(
+          groupData.keywords.includes(kw),
+          `Group "${groupPath}" 应包含关键词 "${kw}"`
+        );
+      }
     }
   });
 });

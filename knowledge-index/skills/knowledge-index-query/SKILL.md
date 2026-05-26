@@ -104,10 +104,10 @@
    
    输出包含：
    - Group 树结构
-   - 每个 Group 的 `word_cloud_keywords`（冷门 Relation 的关键词聚合）
+   - 每个 Group 的 `keywords`（Group 级主题标签集合）
 
 2. **组装语义查询**
-   - 从 `word_cloud_keywords` 中提取相关关键词
+   - 从 `keywords` 中提取相关关键词
    - 组装查询语句：`"<用户问题核心词> <关键词1> <关键词2>"`
 
 3. **调用 MCP memory_recall**

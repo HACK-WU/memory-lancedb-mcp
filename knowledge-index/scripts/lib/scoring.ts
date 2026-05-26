@@ -21,7 +21,6 @@ export interface Relation {
   score: number;
   useCount: number;
   lastUsedTime: number | null;
-  keywords: string[];
   isImported: boolean;
 }
 

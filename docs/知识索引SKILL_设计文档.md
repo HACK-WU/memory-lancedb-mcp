@@ -762,18 +762,16 @@ JSON 文件格式:
           "id": "rel_001",
           "text": "告警规则CRUD流程",
           "score": 15,
-          "keywords": ["规则", "阈值", "触发条件"],
           "isImported": false
         },
         {
           "id": "rel_002",
           "text": "通知渠道配置",
           "score": 12,
-          "keywords": ["邮件", "短信", "渠道"],
           "isImported": false
         }
       ],
-      "word_cloud_keywords": ["静默", "聚合", "升级", "值班表", "分级"],
+      "keywords": ["规则", "阈值", "触发条件", "邮件", "短信", "渠道", "静默", "聚合", "升级", "值班表", "分级"],
       "max_hot_count": 10
     },
     "wiki/监控/告警中心": {
@@ -782,11 +780,10 @@ JSON 文件格式:
           "id": "rel_101",
           "text": "告警规则CRUD流程",
           "score": 0,
-          "keywords": ["规则", "阈值", "CRUD", "触发条件"],
           "isImported": true
         }
       ],
-      "word_cloud_keywords": [],
+      "keywords": ["规则", "阈值", "CRUD", "触发条件"],
       "max_hot_count": 10
     }
   },
@@ -797,10 +794,8 @@ JSON 文件格式:
 **设计要点**：
 - Group 路径含根节点前缀（如"项目根/监控/告警中心"、"wiki/监控/告警中心"），确保不同根节点下的同名 Group 不冲突
 - `hot_relations` 按 score 降序排列
-- 当 `hot_relations` 达到 `max_hot_count` 上限且有新 Relation 加入时：
-  1. 淘汰 score 最低的 Relation 到回收区
-  2. 从回收 Relation 中提取 keywords 合并到 `word_cloud_keywords`
-- `word_cloud_keywords` 自动去重
+- 当 `hot_relations` 达到 `max_hot_count` 上限且有新 Relation 加入时，淘汰 score 最低的 Relation（keywords 已在 Group 级，无需搬运）
+- `keywords` 自动去重，上限 `maxKeywordCount`，超限 FIFO 截断
 - `max_hot_count` 可配置（默认 10）
 - `isImported: true` 的 Relation：keywords 从预扫描结果复用、score 为 0、不参与评分淘汰
 

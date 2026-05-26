@@ -24,7 +24,7 @@ import { DEFAULT_PARTITION_CONFIG } from './lib/constants.js';
 
 interface GroupData {
   hot_relations: Relation[];
-  word_cloud_keywords: string[];
+  keywords: string[];
   max_hot_count: number;
 }
 
