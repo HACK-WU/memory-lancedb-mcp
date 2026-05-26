@@ -120,6 +120,8 @@ program
   .option("--sse", "Use SSE (HTTP) transport instead of stdio")
   .option("-p, --port <n>", "SSE server port (default: 3100)", "3100")
   .option("--host <host>", "SSE server host (default: 127.0.0.1)", "127.0.0.1")
+  .option("--auth-token <token>", "SSE Bearer token for HTTP auth (overrides MEM_MCP_AUTH_TOKEN env var)")
+  .option("--no-auth", "Disable SSE auth explicitly (only allowed when binding loopback host)")
   .option("-q, --quiet", "Suppress debug logs")
   .action(async (opts) => {
     try {
@@ -148,14 +150,23 @@ program
           console.error("❌ Invalid port number. Must be 1-65535.");
           process.exit(1);
         }
+        // commander 对 --no-auth 会设置 opts.auth = false；未传时 opts.auth 为 undefined。
+        // 我们根据 opts.auth === false 识别是否显式传了 --no-auth。
+        const noAuth = opts.auth === false;
         await startSseServer({
           configPath: opts.config,
           scope: opts.scope,
           quiet: opts.quiet ?? false,
           port,
           host: opts.host,
+          authToken: opts.authToken,
+          noAuth,
         });
       } else {
+        // stdio 模式：鉴权选项无意义，仅提示
+        if (opts.authToken || opts.auth === false) {
+          console.error("ℹ️  --auth-token / --no-auth 仅在 SSE 模式（--sse）下生效，已忽略。");
+        }
         await startMcpServer({
           configPath: opts.config,
           scope: opts.scope,

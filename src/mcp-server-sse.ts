@@ -23,6 +23,13 @@ import {
 } from "./lifecycle.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Buffer } from "node:buffer";
+import {
+  resolveAuthConfig,
+  validateAuthPolicy,
+  extractToken,
+  timingSafeCompare,
+  logAuthFailure,
+} from "./sse-auth.js";
 
 // ============================================================================
 // Types
@@ -37,6 +44,10 @@ export interface SseServerOptions extends RuntimeOptions {
   serverName?: string;
   /** Server version */
   serverVersion?: string;
+  /** Bearer token for HTTP auth (CLI 优先，次为 MEM_MCP_AUTH_TOKEN 环境变量) */
+  authToken?: string;
+  /** 显式关闭鉴权（仅回环监听下允许） */
+  noAuth?: boolean;
 }
 
 // ============================================================================
@@ -61,6 +72,19 @@ export async function startSseServer(options: SseServerOptions = {}): Promise<vo
   const serverName = buildServerName(baseServerName, options.scope);
   const serverVersion = options.serverVersion ?? "0.1.0";
 
+  // 0. 鉴权启动期策略校验（必须在 createMemoryRuntime 之前，避免差配置费资源）
+  const authConfig = resolveAuthConfig({
+    authToken: options.authToken,
+    noAuth: options.noAuth,
+  });
+  const authPolicy = validateAuthPolicy({
+    host,
+    authConfig,
+    noAuth: options.noAuth,
+  });
+  const authEnabled = authPolicy.enabled;
+  const expectedToken = authPolicy.expectedToken;
+
   // 1. Initialize runtime
   const runtime = await createMemoryRuntime({
     ...options,
@@ -80,10 +104,17 @@ export async function startSseServer(options: SseServerOptions = {}): Promise<vo
 
   // 4. Create HTTP server
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // CORS headers
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    // CORS headers — 动态回显 Origin，避免与 Bearer 鉴权矛盾
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+
+    // Referrer-Policy — 阻止 Query token 通过 Referer 泄露到第三方
+    res.setHeader("Referrer-Policy", "no-referrer");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -92,6 +123,30 @@ export async function startSseServer(options: SseServerOptions = {}): Promise<vo
     }
 
     const url = new URL(req.url || "/", `http://${host}:${port}`);
+
+    // 鉴权中间件：默认保护所有路径，仅豁免 /health GET 和 OPTIONS
+    if (
+      authEnabled &&
+      expectedToken &&
+      !(url.pathname === "/health" && req.method === "GET")
+    ) {
+      const provided = extractToken(req, url);
+      if (!provided) {
+        logAuthFailure(req, url.pathname, "missing_token");
+        res.setHeader("WWW-Authenticate", 'Bearer realm="mcp"');
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      if (!timingSafeCompare(provided, expectedToken)) {
+        logAuthFailure(req, url.pathname, "invalid_token");
+        res.setHeader("WWW-Authenticate", 'Bearer realm="mcp"');
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      // 鉴权通过，继续走后续路由
+    }
 
     // Health endpoint
     if (url.pathname === "/health" && req.method === "GET") {
@@ -186,6 +241,20 @@ export async function startSseServer(options: SseServerOptions = {}): Promise<vo
     console.log(`[mem] SSE endpoint: http://${host}:${port}/sse`);
     console.log(`[mem] Message endpoint: http://${host}:${port}/message`);
     console.log(`[mem] Health: http://${host}:${port}/health`);
+    if (authEnabled) {
+      console.log(`[mem] Auth: enabled (Bearer token, source=${authConfig.source})`);
+      if (authPolicy.weakToken) {
+        console.warn(
+          `[mem] WARNING: auth token length < 16; 强度不足，建议使用 ≥16 位的随机字符串。`,
+        );
+      }
+      console.warn(
+        `[mem] WARNING: Query token (?token=xxx) 可通过浏览器历史、服务端日志泄露，` +
+        `建议优先使用 Authorization 头传递 token。`,
+      );
+    } else {
+      console.log(`[mem] Auth: disabled (loopback-only access)`);
+    }
     console.log(`[mem] Tools: ${runtime.listTools().map(t => t.name).join(", ")}`);
   });
 
