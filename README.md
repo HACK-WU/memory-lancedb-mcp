@@ -259,20 +259,93 @@ npm rebuild @lancedb/lancedb
 适用于需要跨网络连接的场景，如 Docker、WSL、远程服务器：
 
 ```bash
-# 启动 SSE 服务器
-mem serve --sse --port 3100 --host 0.0.0.0
+# ✅ 本地访问（默认绑定 127.0.0.1，免 token）
+mem serve --sse --port 3100
+
+# ✅ 远程访问：必须配置 Bearer token
+MEM_MCP_AUTH_TOKEN=$(openssl rand -hex 24) \
+  mem serve --sse --port 3100 --host 0.0.0.0
+
+# 或显式传入 token
+mem serve --sse --port 3100 --host 0.0.0.0 --auth-token "<token>"
 ```
 
-客户端配置：
+#### 启动方式 vs 鉴权要求对照表
+
+| 启动方式 | host | token | 行为 |
+|---------|------|-------|------|
+| `mem serve --sse` | `127.0.0.1` | 无 | ✅ 启动，免鉴权（保留本地开发体验） |
+| `mem serve --sse --auth-token xxx` | `127.0.0.1` | 有 | ✅ 启动，启用鉴权 |
+| `mem serve --sse --host 0.0.0.0 --auth-token xxx` | `0.0.0.0` | 有 | ✅ 启动，启用鉴权 |
+| `mem serve --sse --host 0.0.0.0` | `0.0.0.0` | 无 | ❌ 拒绝启动（避免裸奔） |
+| `mem serve --sse --host 0.0.0.0 --no-auth` | `0.0.0.0` | — | ❌ 拒绝启动（`--no-auth` 仅限回环） |
+
+> ⚠️ **破坏性变更**：升级到本版本后，`mem serve --sse --host 0.0.0.0` 不再允许免 token 启动。
+> 必须配合 `--auth-token <token>` 或环境变量 `MEM_MCP_AUTH_TOKEN`，否则启动会立即失败。
+
+#### 鉴权保护范围
+
+启用鉴权后，**所有 HTTP 路径默认受保护**（白名单模式），仅以下请求豁免：
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/health` | `GET` | 健康检查，供负载均衡器探活 |
+| 任意路径 | `OPTIONS` | CORS 预检请求，必须放行 |
+
+其余所有路径（`/sse`、`/message` 等）均需携带有效 Bearer token，否则返回 `401`。
+
+#### 客户端如何携带 token
+
+**1. IDE / MCP 客户端（推荐 Authorization 头）**
+
 ```json
 {
   "mcpServers": {
     "memory": {
-      "url": "http://localhost:3100/sse"
+      "url": "http://localhost:3100/sse",
+      "headers": {
+        "Authorization": "Bearer <your-token>"
+      }
     }
   }
 }
 ```
+
+**2. curl 调试**
+
+```bash
+curl -H "Authorization: Bearer <your-token>" http://host:3100/sse
+```
+
+**3. 浏览器 EventSource（兜底用 query 参数）**
+
+```js
+// 浏览器原生 EventSource 无法自定义 header，仅此场景使用 query 兜底
+const es = new EventSource("http://host:3100/sse?token=<your-token>");
+```
+
+> ⚠️ **query 参数的安全注意**：`?token=xxx` 会进入 access log / 反向代理日志 /
+> 浏览器历史记录。**仅在受控网络或调试时使用**；生产环境优先使用 `Authorization` 头。
+> 服务端已自动添加 `Referrer-Policy: no-referrer` 响应头，可防止 token 通过浏览器
+> `Referer` 头泄漏到第三方站点。
+
+#### 鉴权配置优先级
+
+1. CLI `--auth-token <token>` （最高优先级）
+2. 环境变量 `MEM_MCP_AUTH_TOKEN`
+3. `--no-auth` （显式关闭，**仅在回环监听时允许**）
+
+ token 长度 < 16 字符时会打印 WARN 但允许启动；建议使用 ≥24 位的随机字符串。
+> token 长度超过 1024 字符将被拒绝（防止 DoS），并通过时序安全比较防御侧信道攻击。
+
+#### CORS 策略
+
+SSE 模式下 CORS 行为：
+
+- **有 `Origin` 请求头**：动态回显该 Origin 值到 `Access-Control-Allow-Origin`，并添加 `Vary: Origin`，确保浏览器缓存正确区分不同来源。
+- **无 `Origin` 请求头**（如 curl、非浏览器客户端）：不设置 `Access-Control-Allow-Origin`。
+- `Access-Control-Allow-Headers` 包含 `Authorization`，支持 Bearer token 预检。
+- 所有响应自动添加 `Referrer-Policy: no-referrer`，防止敏感信息通过 `Referer` 头泄漏。
 
 ---
 
@@ -294,6 +367,8 @@ mem serve [options]
 | `--sse` | 切换为 SSE 模式（默认 stdio） |
 | `-p, --port <n>` | SSE 端口（默认 3100） |
 | `--host <host>` | SSE 绑定地址（默认 127.0.0.1） |
+| `--auth-token <token>` | SSE Bearer token（覆盖 `MEM_MCP_AUTH_TOKEN` 环境变量） |
+| `--no-auth` | 显式关闭 SSE 鉴权（仅当监听回环地址时允许） |
 | `--dry-run` | 验证配置并列出工具，不启动服务 |
 | `-q, --quiet` | 抑制调试日志 |
 
@@ -304,8 +379,11 @@ mem serve
 # 指定项目 scope
 mem serve --scope myapp
 
-# SSE 模式（远程或 docker）
-mem serve --sse --port 3100 --host 0.0.0.0
+# SSE 模式（本地，默认免 token）
+mem serve --sse --port 3100
+
+# SSE 模式（远程，必须配置 token）
+MEM_MCP_AUTH_TOKEN=<token> mem serve --sse --host 0.0.0.0 --port 3100
 
 # 预览注册的工具
 mem serve --dry-run
@@ -518,13 +596,16 @@ mem scope delete project:myapp --yes
 }
 ```
 
-SSE 远程模式配置：
+SSE 远程模式配置（远程访问需携带 token）：
 
 ```json
 {
   "mcpServers": {
     "memory-remote": {
-      "url": "http://remote-host:3100/sse"
+      "url": "http://remote-host:3100/sse",
+      "headers": {
+        "Authorization": "Bearer <your-token>"
+      }
     }
   }
 }
@@ -797,6 +878,7 @@ retrieval:
 | Variable | Description |
 |----------|-------------|
 | `MEM_CONFIG_PATH` | 覆盖默认配置文件路径 |
+| `MEM_MCP_AUTH_TOKEN` | SSE 模式 Bearer token（可被 `--auth-token` 覆盖） |
 | `OPENAI_API_KEY` | OpenAI API 密钥 |
 | `SILICONFLOW_API_KEY` | SiliconFlow API 密钥 |
 | `JINA_API_KEY` | Jina Rerank API 密钥 |
