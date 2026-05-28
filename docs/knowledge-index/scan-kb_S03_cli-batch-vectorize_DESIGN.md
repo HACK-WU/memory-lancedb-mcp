@@ -14,12 +14,12 @@
 ### 1.2 目标
 
 - 目标 1：`batchVectorize(entries, scope)` 函数，循环调用 `mem store` 为每条 summary 向量化
-- 目标 2：从 stdout 解析 `memoryId`，支持 JSON 和 text 两种输出格式
+- 目标 2：从 `mem store` 已有 stdout 文本格式中解析 `memoryId`（不引入新 `--json` flag）
 - 目标 3：返回 partial result，成功条目带 memoryId，失败条目带 error
 
 ### 1.3 明确不在范围内
 
-- 不修改 `bin/mem.mjs store` CLI 本身
+- 不修改 `bin/mem.mjs store` CLI 本身（不加 `--json` 参数）
 - 不处理 embedding 模型配置（由 mem store 的 config.yaml 控制）
 - 不实现向量检索（只管写入）
 
@@ -47,16 +47,19 @@
 
 ### 4.1 方案概述
 
-`batchVectorize()` 遍历 entries，对每条调用 `execFileSync('node', ['bin/mem.mjs', 'store', content, '--scope', scope])`，从 stdout 解析出 `memoryId`。支持 `--json` 参数优先解析 JSON，否则正则匹配。失败条目 skip 并记录 error，不中断其他条目。
+`batchVectorize()` 串行遍历 entries（且仅处理 `action !== 'delete'` 的条目），对每条调用 `execFileSync('node', ['bin/mem.mjs', 'store', content, '--scope', scope, '--category', 'kb-import'])`，从 stdout 用正则 `/Memory ID:\s*(\S+)/` 提取 memoryId。失败条目 skip 并记录 error，不中断其他条目。
+
+> **依赖**：`src/cli.ts` 的 `store` action 已在 stdout 末尾追加 `Memory ID: <id>` 行（人类可读输出保留，新增一行供程序解析）。这是 S-03 实施的**前置条件**，已在准备阶段完成。
 
 ### 4.2 关键决策点
 
 | 决策 | 选择 | 理由 | 备选 |
 |------|------|------|------|
-| 调用方式 | `execFileSync` 子进程 | 隔离 mem store 的进程状态 | ❌ import createMemoryRuntime：引入初始化复杂度 |
-| 并发策略 | 串行执行 | 避免 LanceDB 写入锁冲突 | ❌ 并发：可能导致 write lock |
-| memoryId 解析 | JSON 优先（`--json`），正则兜底 | 稳定可靠 | ❌ 仅正则：格式变更脆弱 |
+| 调用方式 | `execFileSync` 子进程 | 隔离 mem store 的进程状态，复用已有 CLI 入口 | ❌ import createMemoryRuntime：需重排 dist 依赖、引入双初始化复杂度 |
+| 并发策略 | 串行执行 | 避免 LanceDB 写入锁冲突；用户已确认接受串行延时 | ❌ 并发：可能导致 write lock |
+| memoryId 解析 | 正则 `/Memory ID:\s*(\S+)/` 匹配 cli.ts 新增的固定输出行 | 不增加 `--json` 维护成本，格式由本仓库自有 cli.ts 控制 | ❌ JSON 输出：需要新增 flag 与解析分支 |
 | 失败策略 | skip + 记录 error，继续后续 | 部分成功优于全部失败 | ❌ 遇错即停：66 条中 1 条失败浪费进度 |
+| 统一 category | `--category kb-import` | 便于后续检索/统计/清理 | ❌ 留空：与普通记忆混杂 |
 
 ### 4.3 与现状的差异
 
@@ -122,22 +125,20 @@ function parseMemoryId(stdout: string): string | null;
 [路径] 部署运维/备份恢复.md
 ```
 
-### 8.2 mem store --json 期望输出
-
-```json
-{
-  "ok": true,
-  "memoryId": "mem_abc123",
-  "text": "...",
-  "category": "kb-import"
-}
-```
-
-### 8.3 兼容 text 输出正则
+### 8.2 mem store 实际 stdout（含本期新增的 ID 行）
 
 ```
-/memoryId\s*[:：]\s*(\S+)/
+Stored: "[摘要] 面向LanceDB数据库的备份恢复SOP..." in scope 'mcp-test'
+Memory ID: 0123abcd-4567-89ef-0123-456789abcdef
 ```
+
+### 8.3 memoryId 解析正则
+
+```
+/^Memory ID:\s*(\S+)$/m
+```
+
+> 该格式由 `src/cli.ts` 控制，是本仓库自有 CLI，无外部兼容压力。
 
 ## 9. 关键流程时序图
 
@@ -170,10 +171,10 @@ sequenceDiagram
 | 场景 | 行为 | 是否对外暴露 |
 |------|------|-------------|
 | `mem store` 子进程超时 | 30s 超时 kill，记录 error | 是（errors 数组） |
-| stdout 无法解析 memoryId | 记录 error：`无法解析 memoryId` | 是 |
+| stdout 无 `Memory ID:` 行 | 记录 error：`无法解析 memoryId` | 是 |
 | `mem store` 返回非 0 退出码 | 记录 error：exitCode + stderr | 是 |
 | entry 数组为空 | 直接返回空 Map | 否 |
-| `--json` 参数不被支持 | 回退正则解析 | 否 |
+| entry.action === 'delete' | 由调用方 (S-06) 过滤，不入 batchVectorize | 否 |
 
 ## 11. 性能 & 安全考虑
 
@@ -211,11 +212,11 @@ sequenceDiagram
 
 | 风险 | 影响 | 预案 |
 |------|------|------|
-| `mem store --json` 不支持 | 无法解析 memoryId | 正则解析兜底 |
+| `Memory ID:` 行格式被未来改动破坏 | 全部条目无 memoryId | 单元测试覆盖该格式，cli.ts 修改 PR 中需同步更新 |
 | embedding API 失败 | 整条跳过 | 记录 error，继续下一条 |
 | LanceDB write lock | 子进程串行，不应出现，但若出现则重试 | 重试 1 次 |
 
 ### 14.2 待定问题
 
-- [ ] `mem store --json` flag 在当前版本是否稳定支持？→ 需要实测验证
-- [ ] 是否需要 `--category kb-import` 统一标记导入的记忆？→ 建议添加
+- [x] `mem store --json` flag → 决定不引入，改用现有 stdout 加 `Memory ID:` 行
+- [x] 是否需要 `--category kb-import` 统一标记导入的记忆？→ 已采纳，默认追加

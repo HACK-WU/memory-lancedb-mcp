@@ -36,9 +36,9 @@
 | 术语 | 含义 | 易混淆点 |
 |------|------|---------|
 | `source` 块 | `group-index.json` 新增字段，记录 `{dir, rootName, commit}` | 不同于旧的 `scan-index.json.sourceDir`，后者将被删除 |
-| `ai-results.json` | AI 输出的结构化结果文件，含 `path/summary/keywords/groupPath/memoryId` | 新增 `groupPath`、`memoryId` 两个字段 |
+| `ai-results.json` | AI 输出的结构化结果文件，含顶层 `meta` + `entries[]` | `entries[]` 新增 `groupPath`、`memoryId`、`action` 字段；顶层新增 `meta:{sourceDir,rootName}` |
 | `mem store` | `bin/mem.mjs store` CLI 命令，用于写入记忆 | 与 MCP 工具 `memory_store` 功能相同但无需 MCP 协议 |
-| `batchVectorize` | CLI 内部函数，循环调用 `mem store` 为每条 summary 向量化 | 替代旧的 AI 逐条调 MCP + vectorize 回写 |
+| `batchVectorize` | CLI 内部函数，循环调用 `mem store` 为每条 summary 向量化 | 通过解析 stdout `Memory ID:` 行获取 memoryId |
 | `diff` | 新子命令，对比 `source.commit` 与 `HEAD` 输出变更文件列表 | 不同于 `git diff`，增加 memoryId 关联输出 |
 
 ## 3. 方案设计（TO-BE）
@@ -76,7 +76,10 @@ flowchart LR
 |------|------|------|------|
 | memoryId 持久化位置 | `relations-cache.json` 的 hot_relation 中 | relation 维度元数据中心，与 keywords 同位置 | ❌ local KB：与模块内容耦合过紧 |
 | 批量向量化方式 | `execFileSync` 调用 `mem store` CLI | 复用已有 CLI，无需新增依赖 | ❌ import createMemoryRuntime：引入运行时初始化复杂度 |
-| 删除的文件处理 | diff 输出含 memoryId，由 AI 决定 forget | 不自动 forget 避免误删 | ❌ 自动 forget：风险不可逆 |
+| memoryId 解析方式 | 在 `src/cli.ts` 末尾追加 `Memory ID: <id>` 行，正则匹配 | 不引入 `--json` flag，最小侵入 | ❌ `--json`：增加 CLI 维护成本 |
+| 增量 modify 实现 | `mem delete <oldId>` + `mem store` 拿新 id | `memory_store` 是 create 语义，无 update；避免双写脏数据 | ❌ 复用旧 memoryId：实际产生两条独立记忆 |
+| 增量 delete 实现 | `mem delete <oldId>` + 清索引 | 避免搜索返回已删除内容 | ❌ 只清索引、留记忆：搜索冗余 |
+| 增量操作语义标记 | S-02 的 `entry.action` 枚举字段 | 与 add/modify 同维度，语义清晰 | ❌ `summary: "__DELETE__"`：与 summary 非空契约冲突 |
 | `scan-index.json` 迁移 | 不自动迁移，存量 scope 重新导入 | 简化实现，scope 数据量小 | ❌ 自动迁移：增加维护成本 |
 | import-kb.ts 处理 | 逻辑内嵌到 scan-kb.ts，原文件保留只读 | 避免破坏性删除，后续可清理 | ❌ 直接删除：影响 git history 可追溯性 |
 
@@ -178,5 +181,5 @@ interface GroupIndexSource {
 
 ### 7.3 待定问题（Open Questions）
 
-- [ ] `mem store` 返回的 memoryId 如何从 stdout 解析：`--json` flag 是否稳定支持？→ 需要验证
-- [ ] 并发 `mem store` 是否有锁冲突风险？→ 串行执行或小并发（5 路）？
+- [x] `mem store` 返回的 memoryId 如何从 stdout 解析 → 在 `src/cli.ts` 末尾追加 `Memory ID: <id>` 行，正则匹配
+- [x] 并发 `mem store` 是否有锁冲突风险？→ 默认串行执行，一期不引入并发

@@ -111,25 +111,57 @@ npx jiti knowledge-index/scripts/get-module-info.ts \
 3. `query-group.ts` 查看导航与热点
 4. `get-module-info.ts` 读取原文回答
 
-### 外部知识库导入
+### 外部知识库导入（推荐：S-04 统一流程）
 
-1. `scan-kb.ts scan`
-2. AI 生成摘要和关键词
-3. `scan-kb.ts scan --results`
-4. `scan-kb.ts vectorize`
-5. AI 调用父项目的 `memory_store`
-6. `scan-kb.ts vectorize --complete`
-7. `import-kb.ts`
+> 前置条件：**首次使用某个 `scope` 前**，需在 `~/.config/memory-mcp/config.yaml` 注册该 scope，否则 `mem store` 会提示 `Access denied to scope: <scope>`。最小配置：
+>
+> ```yaml
+> scopes:
+>   default: "global"
+>   definitions:
+>     my-project:
+>       description: "knowledge-index 项目 scope"
+>       acl: ["global", "my-project"]
+> ```
+
+#### 首次导入（2 步）
+
+1. AI 生成 `ai-results.json`（顶层 `meta: { sourceDir, rootName }` + `entries[]`）
+2. 一条命令完成：
+
+```bash
+npx jiti knowledge-index/scripts/scan-kb.ts import \
+  --scope my-project \
+  --results ai-results.json
+```
+
+CLI 内部完成：格式校验 → 批量 `mem store` 向量化 → Group 树创建 → `relations-cache` 写入（含 `memoryId`） → `local KB` 写入 → `group-index.source` 块记录（含 git HEAD commit）。
+
+#### 增量更新（3 步）
+
+1. `scan-kb diff --scope my-project` 输出变更文件列表（含已导入条目的 `memoryId`）
+2. AI 根据 diff 处理变更，生成增量 `ai-results.json`（每条带 `action: 'add' | 'modify' | 'delete'`）
+3. `scan-kb import --scope my-project --mode incremental --results ai-results.json`
+
+增量语义：
+
+- `add`：新增 → 向量化 + 写入索引
+- `modify`：更新 → `mem delete <oldId>` + 重新向量化（拿新 id）+ 替换索引
+- `delete`：删除 → `mem delete <oldId>` + 移除索引
+
+### 外部知识库导入（旧流程，仍可用）
+
+旧的 7 步流程仍保留兼容：`scan` → `scan --results` → `vectorize` → `memory_store` → `vectorize --complete` → `import-kb`。`vectorize` 子命令已标记 DEPRECATED，建议迁移到 `import` 子命令。
 
 ## 数据目录
 
 ```text
 knowledge-index/
 ├── kb/{scope}/                    # 运行时数据（自动创建）
-│   ├── group-index.json           # Group 树索引
-│   ├── relations-cache.json       # Relations 缓存 + 评分/分区
-│   ├── scan-index.json            # 预扫描索引
-│   ├── scan-pending.json          # 待处理文件列表
+│   ├── group-index.json           # Group 树索引（含 source 块：dir/rootName/commit）
+│   ├── relations-cache.json       # Relations 缓存 + 评分/分区（含 memoryId/sourcePath）
+│   ├── scan-index.json            # [旧流程] 预扫描索引
+│   ├── scan-pending.json          # [旧流程] 待处理文件列表
 │   ├── {Group}/
 │   │   └── index.json             # 本地 KB 模块信息原文
 │   ├── archive/                   # 归档数据

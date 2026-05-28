@@ -347,6 +347,12 @@ program
       for (const item of result.content) {
         console.log(item.text);
       }
+      // Expose memory id on stdout for programmatic callers (e.g. scan-kb batchVectorize).
+      // Human-readable text above is preserved; this single line is regex-friendly.
+      const storedId = (result as { details?: { id?: string } }).details?.id;
+      if (storedId) {
+        console.log(`Memory ID: ${storedId}`);
+      }
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);

@@ -22,6 +22,10 @@ export interface Relation {
   useCount: number;
   lastUsedTime: number | null;
   isImported: boolean;
+  /** S-04+ 新增：关联到 memory store 的 ID，用于增量 diff/delete */
+  memoryId?: string;
+  /** S-04+ 新增：原始文件相对路径（meta.sourceDir 的相对 posix 路径），用于 diff 关联 memoryId */
+  sourcePath?: string;
 }
 
 // ─── 评分计算 ───

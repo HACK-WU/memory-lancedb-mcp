@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 /**
+ * @deprecated 自 S-04 起，此文件的导入逻辑已迁移到 `scripts/lib/import.ts`，
+ * 推荐使用 `scan-kb import --scope ... --results <ai-results.json>`。
+ *
+ * 本文件保留作为兼容层（仅命令行入口可用），核心逻辑不再演进。
+ * 新流程不再依赖 `scan-index.json` / `scan-pending.json`；统一以 `ai-results.json`
+ * 顶层 meta + entries 为输入。详情见 `docs/knowledge-index/scan-kb-import-unified_DESIGN.md`。
+ *
  * import-kb.ts - 外部知识库导入
  *
  * 约定模式：目录 → Group，文件名 → Relation，文件内容 → 模块信息

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * scan-kb.ts - 外部知识库预扫描与增量扫描
+ * scan-kb.ts - 外部知识库扫描与导入
  *
- * scan：输出待 AI 处理的文件列表，或合并 AI 返回结果到 scan-index.json
- * vectorize：列出待向量化条目，或标记完成的 memoryId
+ * 子命令:
+ *   scan      （兼容存量流程）输出待 AI 处理的文件列表，或合并 AI 返回结果
+ *   import    （S-04）一条命令完成 AI 结果 → 向量化 → Group 树 → 元数据写入
+ *   import --mode incremental（S-06）增量导入：add / modify / delete
+ *   diff      （S-05）对比 source.commit..HEAD 输出变更文件列表
  */
 
 import { Command } from 'commander';
@@ -14,6 +17,10 @@ import { ensureScopeDir, readJson, writeJson } from './lib/store.js';
 import { getKbDir, getScanIndexPath, validateScope } from './lib/scope.js';
 import { walWrite } from './lib/wal.js';
 import { CURRENT_DATA_VERSION } from './lib/constants.js';
+
+import { handleImport } from './lib/import.js';
+import { handleIncremental } from './lib/incremental.js';
+import { handleDiff } from './lib/diff.js';
 
 const MAX_SCAN_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -678,7 +685,7 @@ const program = new Command();
 
 program
   .name('scan-kb')
-  .description('外部知识库预扫描与增量扫描');
+  .description('外部知识库扫描与导入：scan / import / diff');
 
 program
   .command('scan')
@@ -721,6 +728,7 @@ program
 
 program
   .command('vectorize')
+  .description('[DEPRECATED] 已被 `scan-kb import` 取代，保留仅为兼容存量流程，将在后续版本删除。')
   .requiredOption('--scope <scope>', '项目隔离标识')
   .option('--scan-index <scanIndexFile>', '扫描索引文件路径')
   .option('--complete <completeFile>', '完成向量化结果文件')
@@ -733,12 +741,93 @@ program
       validateScope(scope);
       ensureScopeDir(scope);
 
+      console.warn('[deprecated] `scan-kb vectorize` 已废弃，建议使用 `scan-kb import --results <ai-results.json>` 一步完成。');
+
       if (completeFile) {
         handleVectorizeComplete(scope, completeFile, scanIndexFile);
         return;
       }
 
       handleVectorizeList(scope, scanIndexFile);
+    } catch (err) {
+      output({ ok: false, error: (err as Error).message });
+      process.exit(1);
+    }
+  });
+
+// ─── S-04 / S-06：统一导入命令 ────────────────────────────────────────
+
+program
+  .command('import')
+  .description('一条命令完成：AI 结果校验 → 批量向量化 → Group 树创建 → 元数据写入 → source 块记录')
+  .requiredOption('--scope <scope>', '项目隔离标识')
+  .requiredOption('--results <resultsFile>', 'AI 输出的 ai-results.json 路径（含 meta + entries）')
+  .option('--mode <mode>', '导入模式：full | incremental（默认 full）', 'full')
+  .option('--source-dir <sourceDir>', '强制覆盖 ai-results.meta.sourceDir（一般无需传）')
+  .option('--root-name <rootName>', '强制覆盖 ai-results.meta.rootName（一般无需传）')
+  .option('--mapping <mappingFile>', 'mapping 配置文件路径（覆盖 groupPath / relation）')
+  .action((opts) => {
+    try {
+      const scope = String(opts.scope);
+      const resultsFile = path.resolve(String(opts.results));
+      const mode = String(opts.mode || 'full');
+      const sourceDirOverride = opts.sourceDir ? path.resolve(String(opts.sourceDir)) : undefined;
+      const rootNameOverride = opts.rootName ? String(opts.rootName).trim() : undefined;
+      const mappingFile = opts.mapping ? path.resolve(String(opts.mapping)) : undefined;
+
+      validateScope(scope);
+
+      if (mode === 'full') {
+        const result = handleImport({
+          scope,
+          resultsFile,
+          sourceDirOverride,
+          rootNameOverride,
+          mappingFile,
+        });
+        output(result as unknown as Record<string, unknown>);
+        return;
+      }
+
+      if (mode === 'incremental') {
+        const result = handleIncremental({
+          scope,
+          resultsFile,
+          sourceDirOverride,
+          rootNameOverride,
+          mappingFile,
+        });
+        output(result as unknown as Record<string, unknown>);
+        return;
+      }
+
+      output({ ok: false, error: `未知 --mode: ${mode}（应为 full | incremental）` });
+      process.exit(1);
+    } catch (err) {
+      output({ ok: false, error: (err as Error).message });
+      process.exit(1);
+    }
+  });
+
+// ─── S-05：增量 diff ──────────────────────────────────────────────────
+
+program
+  .command('diff')
+  .description('对比 group-index.source.commit 与 HEAD，输出变更文件列表（含 memoryId 关联）')
+  .requiredOption('--scope <scope>', '项目隔离标识')
+  .option('--output <outputFile>', '将结果写入指定文件（默认仅 stdout）')
+  .action((opts) => {
+    try {
+      const scope = String(opts.scope);
+      const outputFile = opts.output ? path.resolve(String(opts.output)) : undefined;
+      validateScope(scope);
+
+      const result = handleDiff({ scope, outputFile });
+      const json = JSON.stringify(result, null, 2);
+      if (outputFile) {
+        fs.writeFileSync(outputFile, json + '\n', 'utf-8');
+      }
+      console.log(json);
     } catch (err) {
       output({ ok: false, error: (err as Error).message });
       process.exit(1);
