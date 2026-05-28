@@ -2,31 +2,13 @@
 
 本文档汇总 `knowledge-index` 当前实现中的**常见报错、警告与恢复方式**。
 
-整体原则是：
+整体原则：
 
 - **输入非法时快速失败**
 - **可恢复场景尽量给出 hint / next_step**
 - **能够兜底时优先退化，而不是直接崩溃**
 
-## 输出风格
-
-大多数脚本在失败时会输出：
-
-```json
-{
-  "ok": false,
-  "error": "..."
-}
-```
-
-部分脚本，尤其是 `scan-kb.ts`，还会额外返回：
-
-- `hint`
-- `next_step`
-- `possible_causes`
-- `example`
-
-这类增强输出主要用于告诉调用方：**为什么失败、下一步该做什么、期望输入长什么样**。
+---
 
 ## 一类：参数校验错误
 
@@ -37,15 +19,9 @@
 - `--scope ../etc`
 - `--scope bad/scope`
 
-结果：
+结果：直接拒绝，防止路径遍历或跨 scope 污染。
 
-- 会被直接拒绝
-- 防止路径遍历或跨 scope 污染
-
-恢复方式：
-
-- 只使用字母、数字、连字符、下划线
-- 不要包含 `/`、`..` 等路径成分
+恢复：只使用字母、数字、连字符、下划线，不要包含 `/`、`..`。
 
 ### `manage-index.ts` 参数缺失
 
@@ -53,262 +29,147 @@
 
 - `create-root` 缺少 `--root-name`
 - `create` 缺少 `--parent` 或 `--name`
-- `delete` 缺少 `--parent` 或 `--name`
-
-恢复方式：
-
-- 先确认当前 action
-- 再补齐对应参数
 
 ### `sync-relation.ts` 单条模式参数不完整
 
-单条模式要求同时提供：
+单条模式要求同时提供 `--group`、`--relation`、`--module-info`、`--keywords`。
 
-- `--group`
-- `--relation`
-- `--module-info`
-- `--keywords`
-
-如果缺少其中任一项，会直接失败。
+---
 
 ## 二类：数据文件缺失或损坏
 
 ### `relations-cache.json` 不存在
 
-影响脚本：
+影响：`sync-relation.ts`、`get-module-info.ts`
 
-- `sync-relation.ts`
-- `get-module-info.ts`
-
-典型原因：
-
-- scope 尚未初始化
-- 运行时数据被误删
-- 数据文件损坏导致读取失败
-
-恢复方式：
-
-- 先执行任一会触发 `ensureScopeDir` 的命令初始化 scope
-- 或检查 `knowledge-index/kb/{scope}/relations-cache.json` 是否被误删
+恢复：先执行任一会触发 `ensureScopeDir` 的命令初始化 scope。
 
 ### `group-index.json` 损坏
 
-影响脚本：
+影响：`query-group.ts`、`manage-index.ts`
 
-- `query-group.ts`
-- `manage-index.ts`
-
-典型现象：
-
-- JSON 解析失败
-- 查询或写入时返回 `ok: false`
-
-恢复方式：
-
-- 检查对应 scope 下的 `group-index.json`
-- 必要时从 `backup/` 或模板恢复
+恢复：从 `backup/` 或模板恢复。
 
 ### 本地 KB 文件不存在
 
-影响脚本：
+影响：`get-module-info.ts`
 
-- `get-module-info.ts`
+恢复：使用 `sync-relation.ts` 重新写入 `module-info`。
 
-典型现象：
-
-- `本地 KB 文件不存在`
-- `本地 KB 中未找到 ... 的内容`
-
-恢复方式：
-
-- 使用 `sync-relation.ts` 重新写入 `module-info`
-- 或检查该 Group 下的 `index.json` 是否被误删
+---
 
 ## 三类：`scan-kb.ts` 相关错误
 
-`scan-kb.ts` 是当前错误提示最完整的脚本之一。
+### `scan-kb diff` 返回 `status: 'first_import'`
 
-### `source 目录不存在或不是目录`
+原因：`group-index.source` 块不存在，说明尚未首次导入。
 
-触发场景：
+恢复：先执行 `scan-kb import` 完成全量导入。
 
-- `--source` 路径写错
-- 传入的是文件，不是目录
-- 把 `knowledge-index/kb/{scope}` 误当成外部知识库目录
+### `scan-kb diff` 返回 0 变更
 
-恢复方式：
+可能原因：
 
-1. 检查路径是否真实存在
-2. 确认它是外部 Markdown 知识库根目录
-3. 确认目录下确实包含 `.md` 文件
+1. 文件修改后未 `git commit`（diff 依赖 git commit 记录）
+2. `source.commit` 已是最新 HEAD
 
-### `scan-pending.json 不存在`
+恢复：确认文件变更已 commit，再执行 diff。
 
-触发场景：
+### `meta.sourceDir 不存在或不是目录`
 
-- 直接执行了 `scan --results`
-- 但此前没有先执行第一步 `scan`
+原因：`--source-dir` 路径写错，或传入的是文件而非目录。
 
-恢复方式：
+恢复：确认路径指向外部 Markdown 知识库根目录。
 
-1. 先执行不带 `--results` 的 `scan`
-2. 生成 `scan-pending.json`
-3. 再执行 `scan --results`
+### `meta.rootName 与首次导入不一致`
 
-### `results 文件不存在`
+原因：增量导入时 `meta.rootName` 与 `source.rootName` 不匹配。
 
-触发场景：
+恢复：使用与首次导入相同的 `rootName`。
 
-- `--results` 路径写错
-- AI 结果文件尚未生成
+### `entries[].path 必填且为字符串`
 
-恢复方式：
+原因：`ai-results.json` 格式有误，缺少必填的 `path` 字段。
 
-- 先确认 AI 结果文件已经写出
-- 再检查 JSON 格式至少包含 `entries`
+恢复：检查 JSON 格式，确保每条 entry 包含 `path`。
 
-### `scan-index.json 不存在`
+### `action=delete 必须携带 memoryId`
 
-触发场景：
+原因：增量删除条目缺少旧 `memoryId`。
 
-- 只执行了 `scan`
-- 还没有执行 `scan --results`
-- 或使用了自定义输出路径，但 `vectorize` 没带 `--scan-index`
+恢复：先执行 `scan-kb diff` 获取变更文件的 `memoryId`，填入 `ai-results.json`。
 
-恢复方式：
+### `Access denied to scope: <scope>`
 
-1. 先执行 `scan`
-2. 再执行 `scan --results`
-3. 最后再执行 `vectorize`
+原因：scope 未在 `~/.config/memory-mcp/config.yaml` 的 `scopes.definitions` 中注册。
 
-### `complete 文件不存在`
+恢复：在 config.yaml 中添加 scope 定义：
 
-触发场景：
+```yaml
+scopes:
+  definitions:
+    my-project:
+      description: "项目描述"
+      acl: ["global", "my-project"]
+```
 
-- `vectorize --complete` 指向了不存在的结果文件
-
-恢复方式：
-
-- 先完成摘要向量化
-- 生成包含 `path` 与 `memoryId` 的 JSON 文件
-- 再执行 `vectorize --complete`
+---
 
 ## 四类：关键词相关问题
 
 ### 关键词没有被接受
 
-影响脚本：
+影响：`sync-relation.ts`
 
-- `sync-relation.ts`
+规则：必须是自然语言词汇，不能像代码符号；必须真实出现在 `module-info` 原文中。
 
-关键词校验规则：
+恢复：先把关键词写进 `module-info`，再执行 `sync-relation.ts`。
 
-- 必须是自然语言词汇
-- 不能像路径、文件名、代码表达式那样带明显代码特征
-- **必须真实出现在 `module-info` 原文中**
+---
 
-例如：
+## 五类：增量导入相关错误（S-06）
 
-- 原文只有“登录流程”
-- 你传了 `登录,认证,token`
+### `mem delete` 失败
 
-如果原文里没有“认证”或“token”，那么它们会进入：
+现象：增量 modify/delete 时 `deleteMemory` 返回错误。
 
-- `invalid_keywords`
+处理：不阻塞流程，记录为 warning 继续执行。旧记录可能残留在向量数据库中，但不影响新记录的写入。
 
-而不是 `keywords`
+### `relations-cache 中未找到 sourcePath`
 
-### 为什么有些关键词会被判无效
+现象：删除条目时 `removeFromCache` 返回 false。
 
-常见原因：
+原因：缓存中没有对应 `sourcePath` 的 relation，可能是首次导入时未写入 `sourcePath`。
 
-- 没出现在原文里
-- 更像代码符号、路径或文件扩展名
-- 只是调用方主观补充的标签，而不是原文里的自然语言表达
+处理：记录 warning，继续清理 local KB。
 
-恢复方式：
+---
 
-- 先把关键词写进 `module-info`
-- 再执行 `sync-relation.ts`
+## 六类：展示参数问题
 
-## 五类：展示参数问题
+### `--partition` / `--mode` 无效
 
-影响脚本：
+`query-group.ts` 的 `--partition` 有效值：`hot`/`warm`/`cold`/`emerging`/`all`。
+`--mode` 有效值：`full`/`hot`/`compact`/`help`。
 
-- `query-group.ts`
+越界参数会回退为默认值并输出警告。
 
-### `--partition` 无效
-
-有效值只有：
-
-- `hot`
-- `warm`
-- `cold`
-- `emerging`
-- `all`
-
-### `--mode` 无效
-
-有效值只有：
-
-- `full`
-- `hot`
-- `compact`
-- `help`
-
-### `--depth` / `--hot-count` 越界
-
-这类场景一般不会直接失败，而是：
-
-- 回退为默认值
-- 或限制到最大值
-- 同时输出警告
-
-## 六类：警告而非错误的场景
-
-这些情况通常不会终止执行，但会提示调用方注意：
-
-### `scan-kb.ts`
-
-- 无法获取 Git 信息，退化为全量扫描
-- `lastScannedCommit` 不存在，退化为全量扫描
-- 增量扫描失败，退化为全量扫描
-
-### `import-kb.ts`
-
-- 未提供 `--scan-index`，导入关键词为空
-- 遇到空文件，跳过导入
-- 遇到超大文件，跳过导入
-- 根节点已存在，执行覆盖更新
-- `mapping.path` 首段与根名重复，自动去重
-
-### `sync-relation.ts`
-
-- 批量模式下某条 `module_info` 为空，被跳过
-- 某条 Relation 的关键词全部无效或为空
+---
 
 ## 推荐排障顺序
 
-当你看到 `ok: false` 时，建议按这个顺序排查：
-
 1. **先看命令参数是否完整**
-2. **再看 `--scope` 是否正确**
+2. **再看 `--scope` 是否正确且已注册**
 3. **再看输入路径是否真的存在**
 4. **再看运行时数据文件是否缺失或损坏**
 5. **最后再检查工作流顺序是否跳步了**
-
-尤其是外部导入链路里，最常见的并不是代码错误，而是：
-
-- 没先执行 `scan`
-- 没执行 `scan --results`
-- 直接执行了 `vectorize`
-- `--source` 指错目录
 
 ## 最常见的恢复口诀
 
 ```text
 参数先补齐
 路径先确认
+scope 先注册
 索引先生成
 再做下一步
 ```

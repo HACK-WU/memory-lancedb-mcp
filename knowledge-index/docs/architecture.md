@@ -36,11 +36,11 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    GI["group-index.json<br/>Group 树索引"]
-    RC["relations-cache.json<br/>Relation 热点缓存 / 关键词 / 分区"]
+    GI["group-index.json<br/>Group 树索引 + source 块"]
+    RC["relations-cache.json<br/>Relation 缓存 / 关键词 / 分区<br/>（含 memoryId / sourcePath）"]
     KB["kb/<scope>/<group>/index.json<br/>本地 KB 原文"]
-    SI["scan-index.json<br/>外部知识库扫描状态账本"]
-    SP["scan-pending.json<br/>扫描断点（临时）"]
+    SI["scan-index.json<br/>[旧流程] 外部知识库扫描状态账本"]
+    SP["scan-pending.json<br/>[旧流程] 扫描断点（临时）"]
 
     GI --> RC
     RC --> KB
@@ -48,41 +48,64 @@ flowchart LR
     SP --> SI
 ```
 
-### 五个核心文件
+### 核心文件
 
 | 文件 | 角色 | 读写方 | 生命周期 |
 |------|------|--------|---------|
-| `group-index.json` | Group 树结构索引，负责树形导航 | 所有脚本读写 | 永久，随 Group 增删改 |
-| `relations-cache.json` | Relation 缓存（评分/淘汰/词云），负责本地快速路径 | 所有脚本读写 | 永久，随 Relation 使用动态更新 |
-| `kb/{scope}/{group}/index.json` | 本地 KB 原文，负责最终交付 | get-module-info 读，sync-relation/import-kb 写 | 永久，随知识沉淀积累 |
-| `scan-index.json` | 外部知识库扫描状态账本 | scan-kb / import-kb 读写 | 永久，增量扫描依赖 `lastScannedCommit` |
-| `scan-pending.json` | 扫描断点（待处理文件列表） | scan-kb 写，AI 读 | 临时，merge 后可删除 |
+| `group-index.json` | Group 树结构索引 + `source` 块（`dir`/`rootName`/`commit`） | 所有脚本读写 | 永久，随 Group 增删改 |
+| `relations-cache.json` | Relation 缓存（评分/淘汰/词云），含 `memoryId`/`sourcePath` | 所有脚本读写 | 永久，随 Relation 使用动态更新 |
+| `kb/{scope}/{group}/index.json` | 本地 KB 原文 | get-module-info 读，sync-relation/import 写 | 永久，随知识沉淀积累 |
+| `scan-index.json` | [旧流程] 外部知识库扫描状态账本 | scan-kb / import-kb 读写 | 永久，增量扫描依赖 `lastScannedCommit` |
+| `scan-pending.json` | [旧流程] 扫描断点 | scan-kb 写，AI 读 | 临时，merge 后可删除 |
 
-### 三层作用
+### `group-index.json` 的 `source` 块
 
-- **`group-index.json`**：负责树形导航，描述有哪些 Group，以及 Group 的父子关系
-- **`relations-cache.json`**：负责本地快速路径，缓存热门 Relation、关键词和冷热分区
-- **`kb/{scope}/{group}/index.json`**：负责最终交付，保存可直接供 AI 使用的 Markdown 原文
+S-01 新增字段，记录外部知识库来源信息，用于增量 diff：
+
+```json
+{
+  "version": 1,
+  "scope": "qoder-wiki",
+  "roots": { "QoderWiki": { ... } },
+  "source": {
+    "dir": "/abs/path/to/source",
+    "rootName": "QoderWiki",
+    "commit": "b945303942b62176ace2bd58f294f5c78e5c2438"
+  },
+  "updatedAt": "2026-05-28T05:17:22.360Z"
+}
+```
+
+- `dir`：外部知识库目录绝对路径
+- `rootName`：导入根节点名称（与 `meta.rootName` 一致）
+- `commit`：导入时的 git HEAD commit，`scan-kb diff` 以此为基准检测变更
+
+### `relations-cache.json` 的 `memoryId` / `sourcePath`
+
+S-04 新增的关联字段，写入 `hot_relations` 每条 relation 中：
+
+```json
+{
+  "id": "rel_003",
+  "text": "Scope 隔离机制",
+  "score": 0,
+  "useCount": 0,
+  "lastUsedTime": null,
+  "isImported": true,
+  "memoryId": "dbc6f2a0-d62b-47cb-835a-371942fdc08a",
+  "sourcePath": "核心概念/Scope 隔离机制.md"
+}
+```
+
+- `memoryId`：向量数据库中对应记录的 ID，用于 `modify`（delete+create）和 `delete` 操作
+- `sourcePath`：相对 `source.dir` 的 posix 路径，用于 `scan-kb diff` 关联变更文件
 
 ### `index.json` 的 key 因写入来源不同而异
 
-> **重要**：本地 KB 的 `index.json` 是一个 `{ [key: string]: markdown }` 结构，key 的值取决于谁写入的：
-
 | 写入脚本 | key 来源 | 示例 |
 |---------|---------|------|
-| `import-kb.ts` | 文件名去 `.md` 扩展名 | `"多项目隔离"` |
+| `import-kb.ts` / `scan-kb import` | 文件名去 `.md` 扩展名 | `"多项目隔离"` |
 | `sync-relation.ts` | `--relation` 参数原文 | `"标签系统"` |
-
-这意味着：**导入外部知识库时，`relations-cache.json` 中的 `Relation.text` 与 `index.json` 的 key 一致，都是文件名风格**（如 `"多项目隔离"`），而不是语义描述（如 `"多项目隔离机制文档，详细阐述Scope概念与ACL隔离原理..."`）。
-
-### `scan-index.json` 与 `scan-pending.json` 的关系
-
-两者通过 `path` 字段关联，但角色截然不同：
-
-- **`scan-pending.json`**：中间产物，记录"待处理"状态。AI 根据 `files[]` 列表生成摘要+关键词后，通过 `scan --results` 合并到 `scan-index.json`
-- **`scan-index.json`**：持久状态账本，记录"已处理"结果。包含 `vectorized`/`memoryId` 状态，是增量扫描和向量化流程的核心依据
-
-删除 `scan-index.json` 会导致：退化为全量扫描、已向量化摘要无法清理（缺少 memoryId）、重复向量化。删除 `scan-pending.json` 仅需重新执行 `scan` 即可恢复。
 
 ## 运行时主链路
 
@@ -103,6 +126,29 @@ flowchart TD
     D --> A
 ```
 
+## 外部知识库导入链路（S-04 统一流程）
+
+```mermaid
+flowchart LR
+    EXT[外部 Markdown 知识库] --> AI[AI 生成 ai-results.json<br/>meta + entries]
+    AI --> IMP[scan-kb import<br/>5 阶段流水线]
+    IMP --> VEC[mem store 向量化]
+    IMP --> GI2[group-index.json<br/>Group 树 + source 块]
+    IMP --> RC2[relations-cache.json<br/>含 memoryId / sourcePath]
+    IMP --> KB2[本地 KB 原文]
+```
+
+### 增量更新链路（S-05 + S-06）
+
+```mermaid
+flowchart LR
+    DIFF[scan-kb diff] --> AI2[AI 生成增量 ai-results.json<br/>含 action 字段]
+    AI2 --> INCR[scan-kb import --mode incremental]
+    INCR --> ADD[add: 向量化 + 写索引]
+    INCR --> MOD[modify: mem delete + 重新向量化 + 替换索引]
+    INCR --> DEL[delete: mem delete + 移除索引]
+```
+
 ## 与父项目记忆系统的配合
 
 ### 协作 1：本地快取 + 远端召回
@@ -121,21 +167,3 @@ flowchart TD
 - **查询时**：本地命中优先，记忆检索兜底
 - **写入时**：新知识双写到本地索引与记忆系统
 - **演化时**：热点沉淀在本地，长尾保留在记忆系统
-
-## 外部知识库导入链路
-
-```mermaid
-flowchart LR
-    EXT[外部 Markdown 知识库] --> SCAN[scan-kb scan<br/>生成待处理文件列表]
-    SCAN --> SP[scan-pending.json<br/>待 AI 处理文件列表]
-    SP --> AI[AI 生成摘要 + 关键词]
-    AI --> IDX[scan-index.json<br/>持久状态账本]
-    IDX --> VEC[memory_store<br/>摘要向量化进入记忆系统]
-    IDX --> IMP[import-kb<br/>原文导入本地索引]
-    IMP --> KB[本地 KB + Group 树 + Relation 缓存]
-```
-
-这个链路体现了两层协作：
-
-- **摘要进入记忆系统**：便于语义召回与长尾发现
-- **原文进入本地 KB**：便于直接展示和高质量回答
