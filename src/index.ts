@@ -384,6 +384,7 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
         }
       }
 
+      console.error(`[DEBUG callTool] name=${effectiveName} scope=${normalized.scope} agentId=${effectiveCtx?.agentId} ctxKeys=${Object.keys(effectiveCtx || {}).join(',')}`);
       const result = await api.callTool(effectiveName, normalized, effectiveCtx);
 
       // --- Tag postprocessing ---

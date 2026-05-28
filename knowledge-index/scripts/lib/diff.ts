@@ -105,7 +105,8 @@ export function buildMemoryIdMap(scope: string): Map<string, string> {
 }
 
 /**
- * 解析 `git diff --name-status base..head -- pathspec` 的 stdout
+ * 解析 `git diff -z --name-status base..head -- pathspec` 的 stdout
+ * `-z` 模式下字段以 NUL(\0) 分隔，格式：status\0path[\0path2]\0
  * 状态字符：A=added, M=modified, D=deleted, R=renamed, C=copied, T=type changed
  * 重命名（R）拆解为 deleted(旧) + added(新)
  */
@@ -113,29 +114,34 @@ export function parseGitDiff(stdout: string): { status: 'A' | 'M' | 'D'; path: s
   const out: { status: 'A' | 'M' | 'D'; path: string }[] = [];
   if (!stdout) return out;
 
-  for (const line of stdout.split(/\r?\n/)) {
-    if (!line) continue;
-    const cols = line.split(/\t+/);
-    const statusRaw = cols[0];
-    if (!statusRaw) continue;
+  // -z 模式：NUL 分隔，status 后跟 NUL 再跟路径
+  const tokens = stdout.split('\0').map(t => t.trim()).filter(Boolean);
+  let i = 0;
+  while (i < tokens.length) {
+    const statusRaw = tokens[i];
+    if (!statusRaw) { i++; continue; }
     const ch = statusRaw.charAt(0);
 
     if (ch === 'R' || ch === 'C') {
-      const oldPath = cols[1];
-      const newPath = cols[2];
-      if (!oldPath || !newPath) continue;
-      if (ch === 'R') out.push({ status: 'D', path: oldPath });
-      out.push({ status: 'A', path: newPath });
+      const oldPath = tokens[i + 1];
+      const newPath = tokens[i + 2];
+      if (oldPath && newPath) {
+        if (ch === 'R') out.push({ status: 'D', path: oldPath });
+        out.push({ status: 'A', path: newPath });
+      }
+      i += 3;
       continue;
     }
 
-    if (ch === 'U') continue; // unmerged 忽略
+    if (ch === 'U') { i += 2; continue; } // unmerged 忽略
 
-    const filePath = cols[1];
-    if (!filePath) continue;
-    const status: 'A' | 'M' | 'D' =
-      ch === 'A' ? 'A' : ch === 'D' ? 'D' : 'M'; // T/MM 等归 M
-    out.push({ status, path: filePath });
+    const filePath = tokens[i + 1];
+    if (filePath) {
+      const status: 'A' | 'M' | 'D' =
+        ch === 'A' ? 'A' : ch === 'D' ? 'D' : 'M'; // T/MM 等归 M
+      out.push({ status, path: filePath });
+    }
+    i += 2;
   }
   return out;
 }
@@ -181,6 +187,7 @@ export function handleDiff(args: HandleDiffArgs): DiffOutput {
         '-C',
         gitInfo.repoRoot,
         'diff',
+        '-z',                    // NUL 分隔，避免非 ASCII 文件名被 C 风格转义
         '--name-status',
         `${source.commit}..${gitInfo.head}`,
         '--',

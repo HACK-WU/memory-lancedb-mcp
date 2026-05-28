@@ -1,0 +1,40 @@
+{
+  "meta": {
+    "sourceDir": ".qoder/repowiki/zh/content",
+    "rootName": "QoderWiki"
+  },
+  "entries": [
+    {
+      "path": "项目概述.md",
+      "groupPath": "QoderWiki/概览",
+      "relation": "项目概述",
+      "summary": "memory-lancedb-mcp 是为 AI 应用提供持久化长期记忆的 MCP Server，通过桥接 memory-lancedb-pro 的核心能力，实现语义检索、多项目隔离、自动分类与衰减等企业级记忆管理功能。",
+      "keywords": ["项目概述", "长期记忆", "MCP Server", "语义检索", "多项目隔离"],
+      "action": "add"
+    },
+    {
+      "path": "快速开始.md",
+      "groupPath": "QoderWiki/概览",
+      "relation": "快速开始",
+      "summary": "介绍如何快速启动和配置 memory-lancedb-mcp，包括安装依赖、配置环境变量、启动 stdio/SSE 模式等基本使用流程。",
+      "keywords": ["快速开始", "安装", "配置", "启动", "使用指南"],
+      "action": "add"
+    },
+    {
+      "path": "核心概念/Scope 隔离机制.md",
+      "groupPath": "QoderWiki/核心概念",
+      "relation": "Scope 隔离机制",
+      "summary": "Scope 隔离通过服务端 scope 注入、agentId 绕过与 wrapper 层 ACL 检查三段式实现，既保证跨 scope 模式下的灵活查询，又在锁定模式下严格限制操作范围。",
+      "keywords": ["Scope", "隔离", "访问控制", "ACL", "agentId"],
+      "action": "add"
+    },
+    {
+      "path": "核心概念/LanceDB 向量存储.md",
+      "groupPath": "QoderWiki/核心概念",
+      "relation": "LanceDB 向量存储",
+      "summary": "基于 memory-lancedb-pro 的向量存储方案，支持混合检索（向量+BM25）、Weibull 衰减、智能提取，通过 FakeOpenClawApi 适配 OpenClaw 插件运行时接口。",
+      "keywords": ["LanceDB", "向量存储", "混合检索", "BM25", "Weibull衰减"],
+      "action": "add"
+    }
+  ]
+}
