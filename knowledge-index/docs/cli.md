@@ -2,9 +2,75 @@
 
 所有脚本都位于 `knowledge-index/scripts/`，通过 `npx jiti` 执行。
 
+---
+
+## `scan-kb.ts`（统一入口）
+
+### `import` 子命令（推荐）
+
+统一导入外部知识库，首次全量或增量更新。
+
+```bash
+npx jiti knowledge-index/scripts/scan-kb.ts import \
+  --scope <scope> \
+  --results <ai-results.json> \
+  [--mode full|incremental] \
+  [--source-dir <dir>] \
+  [--root-name <name>] \
+  [--mapping <jsonFile>]
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--scope` | 是 | 项目隔离标识 |
+| `--results` | 是 | `ai-results.json` 路径 |
+| `--mode` | 否 | `full`（默认）或 `incremental` |
+| `--source-dir` | 否 | 覆盖 `meta.sourceDir` |
+| `--root-name` | 否 | 覆盖 `meta.rootName` |
+| `--mapping` | 否 | mapping 文件（配置模式） |
+
+首次全量：5 阶段流水线（校验 → 向量化 → Group 树 → 缓存写入 → source 记录）。
+
+增量更新：按 `action` 分三类处理：
+- `add`：新增 → 向量化 + 写入索引
+- `modify`：`mem delete <oldId>` + 重新向量化 + 替换索引
+- `delete`：`mem delete <oldId>` + 移除索引
+
+### `diff` 子命令
+
+检测自上次导入以来的变更。
+
+```bash
+npx jiti knowledge-index/scripts/scan-kb.ts diff \
+  --scope <scope> \
+  [--output <file>]
+```
+
+输出 `{ added, modified, deleted }` 列表，`modified`/`deleted` 条目携带 `memoryId`。
+
+### `scan` 子命令（旧流程，保留兼容）
+
+```bash
+npx jiti knowledge-index/scripts/scan-kb.ts scan \
+  --scope <scope> --source <dir> --root-name <name> \
+  [--results <ai-results.json>]
+```
+
+### `vectorize` 子命令（DEPRECATED）
+
+```bash
+npx jiti knowledge-index/scripts/scan-kb.ts vectorize --scope <scope>
+npx jiti knowledge-index/scripts/scan-kb.ts vectorize \
+  --scope <scope> --complete <vectorize-results.json>
+```
+
+> 已废弃。`import` 子命令内部集成批量向量化。
+
+---
+
 ## `manage-index.ts`
 
-管理 Group 树索引节点的创建与删除。
+管理 Group 树索引节点。
 
 ```bash
 npx jiti knowledge-index/scripts/manage-index.ts \
@@ -56,9 +122,9 @@ npx jiti knowledge-index/scripts/sync-relation.ts \
 - 关键词必须真实出现在 `module-info` 原文中
 - 未出现在原文中的关键词会被判为无效
 
-## `import-kb.ts`
+## `import-kb.ts`（@deprecated）
 
-把外部 Markdown 知识库导入 `knowledge-index`。
+旧版外部知识库导入脚本，已被 `scan-kb import` 替代。
 
 ```bash
 npx jiti knowledge-index/scripts/import-kb.ts \
@@ -69,25 +135,9 @@ npx jiti knowledge-index/scripts/import-kb.ts \
   --mapping <jsonFile> --root-name <name>
 ```
 
-更完整的 `mapping` 示例与字段说明见：[`docs/import-kb.md`](./import-kb.md)
+详见：[`import-kb.md`](./import-kb.md)
 
-## `scan-kb.ts`
-
-预扫描外部知识库，并管理摘要向量化状态。
-
-```bash
-npx jiti knowledge-index/scripts/scan-kb.ts scan \
-  --scope <scope> --source <dir> --root-name <name>
-
-npx jiti knowledge-index/scripts/scan-kb.ts scan \
-  --scope <scope> --source <dir> --root-name <name> \
-  --results <ai-results.json>
-
-npx jiti knowledge-index/scripts/scan-kb.ts vectorize --scope <scope>
-
-npx jiti knowledge-index/scripts/scan-kb.ts vectorize \
-  --scope <scope> --complete <vectorize-results.json>
-```
+---
 
 ## 常用工作流
 
@@ -98,12 +148,13 @@ npx jiti knowledge-index/scripts/scan-kb.ts vectorize \
 3. `query-group.ts` 检查导航与热点
 4. `get-module-info.ts` 验证原文可读性
 
-### 外部知识库导入
+### 外部知识库导入（推荐新流程）
 
-1. `scan-kb.ts scan`
-2. AI 生成摘要和关键词
-3. `scan-kb.ts scan --results`
-4. `scan-kb.ts vectorize`
-5. AI 调用 `memory_store`
-6. `scan-kb.ts vectorize --complete`
-7. `import-kb.ts`
+1. AI 生成 `ai-results.json`
+2. `scan-kb import --scope <s> --results <f>`
+
+### 增量更新
+
+1. `scan-kb diff --scope <s>`
+2. AI 生成增量 `ai-results.json`
+3. `scan-kb import --scope <s> --mode incremental --results <f>`
