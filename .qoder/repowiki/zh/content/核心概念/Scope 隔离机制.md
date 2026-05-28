@@ -298,3 +298,6 @@ Scope 隔离通过“服务端 scope 注入 + agentId 绕过 + wrapper 层 ACL �
 - [README.md:426-499](file://README.md#L426-L499)
 - [src/cli.ts:449-517](file://src/cli.ts#L449-L517)
 - [src/mcp-server-sse.ts:176-183](file://src/mcp-server-sse.ts#L176-L183)
+## 补充说明
+
+Scope 隔离机制还支持动态 ACL 更新和运行时 scope 切换。
