@@ -70,7 +70,7 @@ RELEASE_NOTES="## ${PKG_NAME} ${TAG}
 
 \`\`\`bash
 # 从 GitHub Release 安装（无需本地构建）
-npm install https://github.com/${REPO}/releases/download/${TAG}/${TARBALL}
+npm install -g https://github.com/${REPO}/releases/download/${TAG}/${TARBALL}
 \`\`\`
 
 ### 包含文件

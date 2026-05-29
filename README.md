@@ -74,24 +74,43 @@ memory-lancedb-mcp 适合需要**持久化长期记忆**的 AI 应用：
 ### Prerequisites
 
 - Node.js ≥ 18
-- Git
 - 嵌入 API 密钥（OpenAI / SiliconFlow / Ollama 等）
 
-### 1. Clone and install
+### 1. 全局安装（推荐）
+
+从 GitHub Release 直接安装预编译包，**无需本地 clone 和构建**：
+
+```bash
+npm install -g https://github.com/HACK-WU/memory-lancedb-mcp/releases/download/v0.1.0/memory-lancedb-mcp-0.1.0.tgz
+```
+
+安装完成后，`mem` 命令即可全局使用：
+
+```bash
+mem --help
+mem serve
+```
+
+> 💡 如需安装其他版本，替换 URL 中的版本号即可。可在 [Releases 页面](https://github.com/HACK-WU/memory-lancedb-mcp/releases) 查看所有可用版本。
+
+### 2. 从源码安装（开发者）
+
+如需参与开发或自定义修改，可以从源码安装：
 
 ```bash
 git clone git@github.com:HACK-WU/memory-lancedb-mcp.git
 cd memory-lancedb-mcp
 npm install
-npx tsc
+npm run build
+npm link   # 将 mem 命令链接到全局
 ```
 
-`npm install` 会自动安装 `memory-lancedb-pro@beta`（含所有子依赖，包括 LanceDB）。
+`npm install` 会自动安装 `memory-lancedb-pro`（含所有子依赖，包括 LanceDB）。
 
-### 2. Initialize configuration
+### 3. Initialize configuration
 
 ```bash
-node ./bin/mem.mjs config init
+mem config init
 # Creates ~/.config/memory-mcp/config.yaml
 ```
 
@@ -124,22 +143,16 @@ embedding:
   dimensions: 768
 ```
 
-### 3. Skip the parent project clone
-
-**以前需要** clone 父仓库并手动 `tsc` 编译 dist/，现在已经不再需要。
-memory-lancedb-mcp 通过 `jiti` 直接从 `node_modules/memory-lancedb-pro/` 加载 TypeScript 源文件，零额外步骤。
-
 ### Platform-Specific Notes
 
 #### Linux (x64)
 
 ```bash
 # LanceDB 需要 AVX2 指令集。如果报错 "Illegal instruction"：
-# → 使用 
-   AVX-only 构建或 ARM64 兼容版本
+# → 使用 AVX-only 构建或 ARM64 兼容版本
 
 # 如缺少原生模块，手动安装：
-npm install @lancedb/lancedb-linux-x64-gnu
+npm install -g @lancedb/lancedb-linux-x64-gnu
 ```
 
 #### WSL (Windows Subsystem for Linux)
@@ -150,7 +163,7 @@ npm install @lancedb/lancedb-linux-x64-gnu
 #
 # 解决方案 — 手动安装 Linux 原生模块：
 npm pack @lancedb/lancedb-linux-x64-gnu --pack-destination /tmp
-cd node_modules/@lancedb/
+cd $(npm root -g)/@lancedb/
 mkdir -p lancedb-linux-x64-gnu
 tar -xzf /tmp/lancedb-lancedb-linux-x64-gnu-*.tgz -C lancedb-linux-x64-gnu/ --strip-components=1
 ```
@@ -163,7 +176,7 @@ tar -xzf /tmp/lancedb-lancedb-linux-x64-gnu-*.tgz -C lancedb-linux-x64-gnu/ --st
 
 确保使用 ARM64 原生模块。如遇问题：
 ```bash
-npm rebuild @lancedb/lancedb
+npm rebuild -g @lancedb/lancedb
 ```
 
 ---
@@ -178,8 +191,8 @@ npm rebuild @lancedb/lancedb
 {
   "mcpServers": {
     "memory": {
-      "command": "node",
-      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve"],
+      "command": "mem",
+      "args": ["serve"],
       "env": {
         "OPENAI_API_KEY": "sk-..."
       }
@@ -194,13 +207,17 @@ npm rebuild @lancedb/lancedb
 {
   "mcpServers": {
     "memory": {
-      "command": "node",
-      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve", "--scope", "project:myapp"],
+      "command": "mem",
+      "args": ["serve", "--scope", "project:myapp"],
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   }
 }
 ```
+
+> 💡 全局安装后 `mem` 命令直接可用。如果 Claude Desktop 找不到 `mem`，请使用完整路径：
+> `"command": "node", "args": ["/usr/local/lib/node_modules/memory-lancedb-mcp/bin/mem.mjs", "serve"]`
+> （路径取决于你的 npm 全局安装位置，可通过 `which mem` 查看）
 
 重启 Claude Desktop 后，在对话中即可使用记忆工具：
 - 说 "请帮我记住这个项目的架构" → 触发 `memory_store`
@@ -214,8 +231,8 @@ npm rebuild @lancedb/lancedb
 {
   "mcpServers": {
     "memory": {
-      "command": "node",
-      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve"],
+      "command": "mem",
+      "args": ["serve"],
       "env": {
         "OPENAI_API_KEY": "sk-..."
       }
@@ -230,8 +247,8 @@ npm rebuild @lancedb/lancedb
 
 ```json
 {
-  "command": "node",
-  "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve"],
+  "command": "mem",
+  "args": ["serve"],
   "env": { "OPENAI_API_KEY": "sk-..." }
 }
 ```
@@ -246,8 +263,8 @@ npm rebuild @lancedb/lancedb
     {
       "name": "memory",
       "type": "stdio",
-      "command": "node",
-      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve"],
+      "command": "mem",
+      "args": ["serve"],
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   ]
@@ -351,8 +368,8 @@ SSE 模式下 CORS 行为：
 
 ## CLI Reference
 
-> **提示**：如果 node 不在 PATH 中，所有 `mem` 替换为 `node ./bin/mem.mjs`。
-> 所有命令均支持 `--config <path>` 指定配置文件。
+> **提示**：全局安装后 `mem` 命令直接可用。所有命令均支持 `--config <path>` 指定配置文件。
+> 如未全局安装，可将 `mem` 替换为 `node ./bin/mem.mjs`。
 
 ### serve — 启动 MCP 服务
 
@@ -583,13 +600,13 @@ mem scope delete project:myapp --yes
 {
   "mcpServers": {
     "memory-app-a": {
-      "command": "node",
-      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve", "--scope", "project:myapp"],
+      "command": "mem",
+      "args": ["serve", "--scope", "project:myapp"],
       "env": { "OPENAI_API_KEY": "sk-..." }
     },
     "memory-app-b": {
-      "command": "node",
-      "args": ["/path/to/memory-lancedb-mcp/bin/mem.mjs", "serve", "--scope", "backend"],
+      "command": "mem",
+      "args": ["serve", "--scope", "backend"],
       "env": { "OPENAI_API_KEY": "sk-..." }
     }
   }
