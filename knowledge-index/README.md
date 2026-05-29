@@ -115,16 +115,34 @@ npx jiti knowledge-index/scripts/get-module-info.ts \
 
 ### 外部知识库导入（推荐：S-04 统一流程）
 
-> 前置条件：**首次使用某个 `scope` 前**，需在 `~/.config/memory-mcp/config.yaml` 注册该 scope，否则 `mem store` 会提示 `Access denied to scope: <scope>`。最小配置：
+> 前置条件：**首次使用某个 `scope` 前**，需在 `~/.config/memory-mcp/config.yaml` 注册该 scope，否则 `mem store` 会提示 `Access denied to scope: <scope>`。
+>
+> **配置结构说明：**
+>
+> - `scopes.default`：默认 scope 名称，未指定 scope 时使用，通常设为 `global`。
+> - `scopes.definitions`：所有 scope 的定义，每个 key 即 scope 名称，包含：
+>   - `description`：该 scope 的用途说明，便于识别。
+>   - `acl`：访问控制列表，声明该 scope **允许读取哪些 scope 的数据**。例如 `["global", "mcp-test"]` 表示该 scope 可访问 `global` 和自身的记忆。通常至少包含 `global` 和自身 scope 名。
+>
+> **示例：多 scope 配置**
 >
 > ```yaml
 > scopes:
->   default: "global"
+>   default: global
 >   definitions:
->     my-project:
->       description: "knowledge-index 项目 scope"
->       acl: ["global", "my-project"]
+>     mcp-test:
+>       description: knowledge-index test scope
+>       acl:
+>         - global
+>         - mcp-test
+>     qoder-wiki:
+>       description: qoder repowiki external KB scope
+>       acl:
+>         - global
+>         - qoder-wiki
 > ```
+>
+> 上面定义了两个 scope：`mcp-test` 用于知识库测试，`qoder-wiki` 用于外部 Wiki 导入。每个 scope 的 `acl` 都包含 `global` 和自身，确保能读取公共记忆与自身数据。
 
 #### 首次导入（2 步）
 
