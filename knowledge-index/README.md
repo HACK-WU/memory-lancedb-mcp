@@ -43,6 +43,17 @@
 
 ## 快速开始
 
+### 前置条件
+
+1. **全局安装 `mem` 命令**：知识索引的所有向量化操作都依赖 `mem` 命令，请先通过全局安装确保 `mem` 可用：
+   ```bash
+   npm install -g https://github.com/HACK-WU/memory-lancedb-mcp/releases/download/v0.1.0/memory-lancedb-mcp-0.1.0.tgz
+   ```
+
+2. **配置嵌入 API**：确保 `~/.config/memory-mcp/config.yaml` 中已配置嵌入 API 密钥。
+
+3. **注册 scope**：首次使用某个 scope 前，需在配置文件中注册该 scope（详见下方"外部知识库导入"部分）。
+
 所有脚本使用 `npx jiti` 执行，位于 `knowledge-index/scripts/` 目录下。
 
 ```bash

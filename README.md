@@ -75,6 +75,7 @@ memory-lancedb-mcp 适合需要**持久化长期记忆**的 AI 应用：
 
 - Node.js ≥ 18
 - 嵌入 API 密钥（OpenAI / SiliconFlow / Ollama 等）
+- `mem` 命令（通过全局安装获得，见下方安装步骤）
 
 ### 1. 全局安装（推荐）
 
@@ -90,6 +91,8 @@ npm install -g https://github.com/HACK-WU/memory-lancedb-mcp/releases/download/v
 mem --help
 mem serve
 ```
+
+> ⚠️ **重要**：`mem` 是本项目的核心命令，所有 MCP 服务、CLI 操作和知识索引功能都依赖它。请确保在全局安装后再使用本项目。
 
 > 💡 如需安装其他版本，替换 URL 中的版本号即可。可在 [Releases 页面](https://github.com/HACK-WU/memory-lancedb-mcp/releases) 查看所有可用版本。
 
