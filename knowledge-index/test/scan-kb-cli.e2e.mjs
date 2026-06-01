@@ -10,11 +10,14 @@ import url from 'node:url';
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const MOCK_MEM = path.join(__dirname, 'fixtures', 'mock-mem.mjs');
 
-// 1) 把 mock-mem 安装到一个独立项目根，让 batch-vectorize 找到它
-const MOCK_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-mock-root-'));
-fs.mkdirSync(path.join(MOCK_ROOT, 'bin'), { recursive: true });
-fs.copyFileSync(MOCK_MEM, path.join(MOCK_ROOT, 'bin', 'mem.mjs'));
-fs.chmodSync(path.join(MOCK_ROOT, 'bin', 'mem.mjs'), 0o755);
+// 创建临时目录，将 mock-mem.mjs 复制为 mem 命令
+const MOCK_BIN_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-mem-bin-'));
+fs.copyFileSync(MOCK_MEM, path.join(MOCK_BIN_DIR, 'mem'));
+fs.chmodSync(path.join(MOCK_BIN_DIR, 'mem'), 0o755);
+
+// 保存原始 PATH 并在测试前添加 mock 目录
+const ORIGINAL_PATH = process.env.PATH;
+process.env.PATH = `${MOCK_BIN_DIR}:${ORIGINAL_PATH}`;
 
 // 2) 真实仓库 fixture
 const GIT_ENV = ' -c user.email=t@t -c user.name=t -c commit.gpgsign=false ';
@@ -43,7 +46,7 @@ function runCli(args, opts = {}) {
   return execSync(`npx jiti ${SCAN_KB} ${args}`, {
     cwd: PROJECT_ROOT,
     encoding: 'utf-8',
-    env: { ...process.env, MEM_PROJECT_ROOT: MOCK_ROOT, ...opts.env },
+    env: { ...process.env, ...opts.env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }

@@ -10,12 +10,14 @@ import url from 'node:url';
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const MOCK_MEM = path.join(__dirname, 'fixtures', 'mock-mem.mjs');
 
-// 关键：把 mock-mem 安装到一个项目根/bin/mem.mjs，用 MEM_PROJECT_ROOT 指过去
-const MOCK_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 's04-mock-root-'));
-fs.mkdirSync(path.join(MOCK_ROOT, 'bin'), { recursive: true });
-fs.copyFileSync(MOCK_MEM, path.join(MOCK_ROOT, 'bin', 'mem.mjs'));
-fs.chmodSync(path.join(MOCK_ROOT, 'bin', 'mem.mjs'), 0o755);
-process.env.MEM_PROJECT_ROOT = MOCK_ROOT;
+// 创建临时目录，将 mock-mem.mjs 复制为 mem 命令
+const MOCK_BIN_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-mem-bin-'));
+fs.copyFileSync(MOCK_MEM, path.join(MOCK_BIN_DIR, 'mem'));
+fs.chmodSync(path.join(MOCK_BIN_DIR, 'mem'), 0o755);
+
+// 保存原始 PATH 并在测试前添加 mock 目录
+const ORIGINAL_PATH = process.env.PATH;
+process.env.PATH = `${MOCK_BIN_DIR}:${ORIGINAL_PATH}`;
 
 import { handleImport } from '../scripts/lib/import.ts';
 import { ensureScopeDir, readJson } from '../scripts/lib/store.ts';

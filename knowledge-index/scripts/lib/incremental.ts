@@ -223,8 +223,7 @@ export function removeFromLocalKb(scope: string, groupPath: string, relationText
 // ─── 主入口 ───
 
 export interface HandleIncrementalArgs extends HandleImportArgs {
-  /** 测试时可注入 mem CLI 路径 */
-  memBinPath?: string;
+  // memBinPath 已移除，直接使用全局 mem 命令
 }
 
 export function handleIncremental(args: HandleIncrementalArgs): IncrementalResult {
@@ -266,7 +265,7 @@ export function handleIncremental(args: HandleIncrementalArgs): IncrementalResul
   const cls = classifyEntries(results.entries);
   const errors: { path: string; error: string }[] = [];
   const groupsTouched = new Set<string>();
-  const memOpts: BatchVectorizeOptions = args.memBinPath ? { memBinPath: args.memBinPath, timeoutMs: 60_000 } : { timeoutMs: 60_000 };
+  const memOpts: BatchVectorizeOptions = { timeoutMs: 60_000 };
 
   let added = 0;
   let modified = 0;

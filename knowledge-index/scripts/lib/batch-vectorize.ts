@@ -9,7 +9,6 @@
  *   - 不处理 action=delete 条目（调用方过滤）
  */
 
-import path from 'path';
 import { execFileSync } from 'child_process';
 
 import type { ScanResultEntry } from './ai-results.js';
@@ -17,20 +16,6 @@ import type { ScanResultEntry } from './ai-results.js';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_CATEGORY = 'kb-import';
 const MEMORY_ID_PATTERN = /^[ \t]*Memory ID:[ \t]*(\S+)[ \t]*$/m;
-
-/** 项目根（mcp-wrapper/），用来定位 bin/mem.mjs */
-function getProjectRoot(): string {
-  // 当前文件在 knowledge-index/scripts/lib/batch-vectorize.ts，向上 3 层
-  // 但 jiti / 编译输出位置不同，统一使用 process.cwd() 兜底
-  // 优先用环境变量 MEM_PROJECT_ROOT 便于测试 mock
-  const envRoot = process.env.MEM_PROJECT_ROOT;
-  if (envRoot) return envRoot;
-  return process.cwd();
-}
-
-function getMemBinPath(): string {
-  return path.join(getProjectRoot(), 'bin', 'mem.mjs');
-}
 
 export interface BatchVectorizeResult {
   /** path → memoryId（成功条目） */
@@ -43,8 +28,6 @@ export interface BatchVectorizeOptions {
   timeoutMs?: number;
   /** memory category，默认 kb-import */
   category?: string;
-  /** 自定义 mem.mjs 路径（仅测试用） */
-  memBinPath?: string;
 }
 
 /**
@@ -73,15 +56,14 @@ export function vectorizeOne(
   scope: string,
   options: BatchVectorizeOptions = {}
 ): { ok: true; memoryId: string } | { ok: false; error: string } {
-  const memBin = options.memBinPath || getMemBinPath();
   const category = options.category || DEFAULT_CATEGORY;
-  const timeout = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const timeout = options.timeoutMs || parseInt(process.env.MEM_TIMEOUT_MS || '', 10) || DEFAULT_TIMEOUT_MS;
   const content = buildVectorizeContent(entry);
 
   try {
     const stdout = execFileSync(
-      'node',
-      [memBin, 'store', content, '--scope', scope, '--category', category],
+      'mem',
+      ['store', content, '--scope', scope, '--category', category],
       {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -147,10 +129,9 @@ export function deleteMemory(
   memoryId: string,
   options: BatchVectorizeOptions = {}
 ): { ok: boolean; error?: string } {
-  const memBin = options.memBinPath || getMemBinPath();
-  const timeout = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const timeout = options.timeoutMs || parseInt(process.env.MEM_TIMEOUT_MS || '', 10) || DEFAULT_TIMEOUT_MS;
   try {
-    execFileSync('node', [memBin, 'delete', memoryId], {
+    execFileSync('mem', ['delete', memoryId], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout,

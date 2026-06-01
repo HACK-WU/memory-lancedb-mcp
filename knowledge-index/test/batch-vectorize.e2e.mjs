@@ -8,8 +8,7 @@ import url from 'node:url';
 import { vectorizeOne, batchVectorize, deleteMemory } from '../scripts/lib/batch-vectorize.ts';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
-// 项目根 = mcp-wrapper/
-process.env.MEM_PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+// 直接使用全局 mem 命令，无需设置 MEM_PROJECT_ROOT
 
 test('S-03 E2E: 单条 vectorizeOne 写入并能读到 memoryId', () => {
   const r = vectorizeOne(
