@@ -79,10 +79,14 @@ memory-lancedb-mcp 适合需要**持久化长期记忆**的 AI 应用：
 
 ### 1. 全局安装（推荐）
 
-从 GitHub Release 直接安装预编译包，**无需本地 clone 和构建**：
+使用安装脚本自动下载最新版本：
 
 ```bash
-npm install -g https://github.com/HACK-WU/memory-lancedb-mcp/releases/download/v0.1.0/memory-lancedb-mcp-0.1.0.tgz
+# 下载安装脚本
+curl -fsSL https://raw.githubusercontent.com/HACK-WU/memory-lancedb-mcp/main/scripts/install-latest.sh -o install-latest.sh
+
+# 执行安装
+bash install-latest.sh
 ```
 
 安装完成后，`mem` 命令即可全局使用：
@@ -94,7 +98,7 @@ mem serve
 
 > ⚠️ **重要**：`mem` 是本项目的核心命令，所有 MCP 服务、CLI 操作和知识索引功能都依赖它。请确保在全局安装后再使用本项目。
 
-> 💡 如需安装其他版本，替换 URL 中的版本号即可。可在 [Releases 页面](https://github.com/HACK-WU/memory-lancedb-mcp/releases) 查看所有可用版本。
+> 💡 脚本会自动检查最新版本并安装。如需手动安装特定版本，可在 [Releases 页面](https://github.com/HACK-WU/memory-lancedb-mcp/releases) 查看所有可用版本。
 
 ### 2. 从源码安装（开发者）
 
