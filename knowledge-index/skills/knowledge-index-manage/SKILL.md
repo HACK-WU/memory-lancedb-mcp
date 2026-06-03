@@ -296,7 +296,8 @@ knowledge-index/kb/
 | Skill | 使用场景 | 依赖 manage-index |
 |------|---------|------------------|
 | knowledge-index-query | 知识缺失路径 | 创建 Group（如需要） |
-| knowledge-index-import | 外部知识库导入 | 自动创建 Group 树 |
-| knowledge-index-incremental | 增量更新 | 自动更新 Group 树 |
+| knowledge-index-build | 首次构建 | 自动创建 Group 树 |
+| knowledge-index-update | 增量更新 | 自动更新 Group 树 |
+| knowledge-index-verify | 验证操作 | 查询 Group 结构 |
 
-**manage-index 是底层能力**，其他 skill 在特定场景下会间接调用。
+**knowledge-index-manage 是底层能力**，其他 skill 在特定场景下会间接调用。
