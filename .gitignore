@@ -46,3 +46,6 @@ test-reports/
 
 # Knowledge index runtime data (re-initializable from _template/)
 knowledge-index/kb/
+
+# Package archives
+*.tgz
