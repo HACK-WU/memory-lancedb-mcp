@@ -20,10 +20,10 @@ import { startSseServer } from "./mcp-server-sse.js";
 import { createMemoryRuntime, normalizeTags } from "./index.js";
 import { initConfig, getConfigPath, loadConfig, getDefaultConfigDir } from "./config.js";
 import YAML from "yaml";
-import { existsSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve, join } from "node:path";
+import { resolve, join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
 const program = new Command();
@@ -31,6 +31,19 @@ const program = new Command();
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/** Read version from package.json (works both in dev and after npm install) */
+function getPackageVersion(): string {
+  try {
+    // __dirname equivalent for ESM
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = join(thisDir, "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return pkg.version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 /** Resolve dbPath like ~/path → /home/user/path */
 function resolveDbPath(dbPath: string | undefined): string {
@@ -105,7 +118,7 @@ function maskSecrets(obj: unknown): unknown {
 program
   .name("mem")
   .description("MCP Server wrapper for memory-lancedb-pro")
-  .version("0.1.0");
+  .version(getPackageVersion());
 
 // ============================================================================
 // mem serve — Start MCP Server
