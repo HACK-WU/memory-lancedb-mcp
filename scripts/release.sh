@@ -50,18 +50,20 @@ fi
 
 echo "==> 打包文件大小: $(du -h ${TARBALL} | cut -f1)"
 
-# 5. 创建 git tag
+# 5. 创建/覆盖 git tag
 TAG="v${VERSION}"
 if git tag -l "$TAG" | grep -q "$TAG"; then
-  echo "警告: tag ${TAG} 已存在，跳过创建"
-else
-  echo "==> 创建 tag: ${TAG}"
-  git tag "$TAG"
+  echo "==> tag ${TAG} 已存在，覆盖..."
+  git tag -d "$TAG"
+  # 也尝试删除远程 tag
+  git push origin ":refs/tags/${TAG}" 2>/dev/null || true
 fi
+echo "==> 创建 tag: ${TAG}"
+git tag "$TAG"
 
-# 6. 推送 tag
+# 6. 推送 tag（强制覆盖）
 echo "==> 推送 tag 到远程..."
-git push origin "$TAG" 2>/dev/null || echo "警告: 推送 tag 失败，请手动推送: git push origin ${TAG}"
+git push origin "$TAG" --force
 
 # 7. 创建 GitHub Release 并上传 tarball
 RELEASE_NOTES="## ${PKG_NAME} ${TAG}
@@ -78,6 +80,12 @@ npm install -g https://github.com/${REPO}/releases/download/${TAG}/${TARBALL}
 - \`bin/\` — CLI 入口脚本"
 
 if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+  # 如果 Release 已存在，先删除再重建
+  if gh release view "$TAG" &>/dev/null 2>&1; then
+    echo "==> Release ${TAG} 已存在，删除旧版本..."
+    gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+  fi
+
   echo "==> 创建 GitHub Release ${TAG}..."
   if [ "$PRERELEASE" = "true" ]; then
     gh release create "$TAG" "${TARBALL}" \
