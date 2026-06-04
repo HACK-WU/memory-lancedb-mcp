@@ -191,15 +191,17 @@ show_help() {
 自动检查并安装 memory-lancedb-mcp 最新版本
 
 选项:
-  --help        显示此帮助信息
-  --local       使用本地模式安装（不添加 -g 全局标志）
+  --help            显示此帮助信息
+  --local           使用本地模式安装（不添加 -g 全局标志）
+  --version <ver>   直接指定版本安装（如 0.1.0-beta）
 
 环境变量:
   GITHUB_TOKEN  GitHub 个人访问令牌，用于提高 API 速率限制
 
 示例:
-  $0            # 自动检查并安装最新版本
-  $0 --local   # 使用本地模式安装
+  $0                    # 自动检查并安装最新版本
+  $0 --local           # 使用本地模式安装
+  $0 --version 0.1.0-beta  # 直接安装指定版本
   GITHUB_TOKEN=xxx $0  # 使用 GitHub Token 避免 API 速率限制
 
 EOF
@@ -207,28 +209,54 @@ EOF
 
 # 主流程
 main() {
+  local install_mode="global"
+  local specified_version=""
+
   # 解析参数
-  case "${1:-}" in
-    --help|-h)
-      show_help
-      exit 0
-      ;;
-    --local)
-      ;;
-    "")
-      ;;
-    *)
-      error "未知选项: $1，使用 --help 查看帮助"
-      ;;
-  esac
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --help|-h)
+        show_help
+        exit 0
+        ;;
+      --local)
+        install_mode="--local"
+        shift
+        ;;
+      --version)
+        specified_version="$2"
+        shift 2
+        ;;
+      "")
+        shift
+        ;;
+      *)
+        error "未知选项: $1，使用 --help 查看帮助"
+        ;;
+    esac
+  done
 
   info "memory-lancedb-mcp 最新版本安装器"
   echo "========================================"
 
   check_dependencies
   check_current_version
-  get_latest_release
-  install_package "$1"
+
+  if [ -n "$specified_version" ]; then
+    # 使用指定的版本（兼容 v 前缀与否）
+    LATEST_VERSION="$specified_version"
+    # 确保 tag 带有 v 前缀用于 URL 路径
+    local tag_ver="$specified_version"
+    [[ "$tag_ver" != v* ]] && tag_ver="v$tag_ver"
+    local bare_ver="${tag_ver#v}"
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${tag_ver}/memory-lancedb-mcp-${bare_ver}.tgz"
+    info "使用指定版本: $LATEST_VERSION"
+  else
+    # 查询最新版本
+    get_latest_release
+  fi
+
+  install_package "$install_mode"
 }
 
 main "$@"
