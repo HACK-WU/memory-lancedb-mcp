@@ -83,7 +83,7 @@ memory-lancedb-mcp 适合需要**持久化长期记忆**的 AI 应用：
 
 ```bash
 # 下载安装脚本
-curl -fsSL https://raw.githubusercontent.com/HACK-WU/memory-lancedb-mcp/main/scripts/install-latest.sh -o install-latest.sh
+curl -fsSL https://raw.githubusercontent.com/HACK-WU/memory-lancedb-mcp/master/scripts/install-latest.sh -o install-latest.sh
 
 # 执行安装
 bash install-latest.sh
