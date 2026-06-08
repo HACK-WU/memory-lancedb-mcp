@@ -180,6 +180,8 @@ npx jiti knowledge-index/scripts/scan-kb.ts import \
 
 1. **格式校验**：验证 `ai-results.json` 格式和字段完整性
 2. **批量向量化**：调用 `mem store` 批量向量化所有条目，解析 `Memory ID`
+   - 存储内容自动拼接为：`[摘要] <summary>\n[关键词] <keywords>\n[路径] <path>`
+   - **路径信息会自动包含**：AI 在 `memory_recall` 检索时，能同时获取摘要和原始文档路径，无需手动在 summary 中添加路径
 3. **Group 树创建**：自动创建 Group 目录结构
 4. **Relations 缓存写入**：写入 `relations-cache.json`，包含 `memoryId` 和 `sourcePath`
 5. **group-index.source 记录**：记录导入元信息（含 git HEAD commit）

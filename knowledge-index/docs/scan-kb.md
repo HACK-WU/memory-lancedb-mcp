@@ -28,6 +28,8 @@ npx jiti knowledge-index/scripts/scan-kb.ts import \
 
 内部 5 阶段流水线：格式校验 → 批量 `mem store` 向量化 → Group 树创建 → `relations-cache` 写入（含 `memoryId`/`sourcePath`）→ `group-index.source` 块记录（含 git HEAD commit）。
 
+> **路径自动包含**：批量向量化时，每条存储内容自动拼接为 `[摘要] <summary>\n[关键词] <keywords>\n[路径] <path>`。AI 通过 `memory_recall` 检索时，能同时获取摘要和原始文档路径，无需手动在 `summary` 中添加路径信息。
+
 ### 增量导入
 
 ```bash
