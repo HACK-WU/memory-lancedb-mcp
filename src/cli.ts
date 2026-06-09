@@ -7,7 +7,7 @@
  *   mem search <q>     Search memories
  *   mem stats          Show statistics
  *   mem scope list     List all scopes and counts
- *   mem scope delete   Delete all memories in a scope
+ *   mem scope delete   Delete all memories in a scope (or --all to clear all)
  *   mem config init    Create default config
  *   mem config show    Show current config
  *   mem config path    Show config file path
@@ -824,15 +824,18 @@ scopeCmd
   });
 
 scopeCmd
-  .command("delete <scope>")
-  .description("Delete all memories in a scope (requires confirmation)")
+  .command("delete [scope]")
+  .description("Delete all memories in a scope, or use --all to clear all scopes (requires confirmation)")
+  .option("--all", "Delete all scopes (except global)")
   .option("--yes", "Skip confirmation prompt")
   .option("--dry-run", "Show what would be deleted without actually deleting")
   .option("--config <path>", "Config file path")
   .action(async (scope, opts) => {
     try {
-      if (scope === "global") {
-        console.error("❌ Cannot delete the 'global' scope. It is system-reserved.");
+      if (!scope && !opts.all) {
+        console.error("❌ Must specify a scope name or use --all.");
+        console.error("   Usage: mem scope delete <scope>");
+        console.error("          mem scope delete --all");
         process.exit(1);
       }
 
@@ -845,26 +848,66 @@ scopeCmd
       const store = new MemoryStore({ dbPath, vectorDim });
 
       const stats = await store.stats();
-      const count = stats.scopeCounts[scope] || 0;
 
-      if (count === 0) {
-        console.log(`Scope "${scope}" has no memories. Nothing to delete.`);
+      // Determine which scopes to delete
+      let scopesToDelete: string[];
+      if (opts.all) {
+        scopesToDelete = Object.keys(stats.scopeCounts).filter((s) => s !== "global");
+        if (scopesToDelete.length === 0) {
+          console.log("No scopes to delete (all memories are in global).");
+          process.exit(0);
+        }
+      } else {
+        if (scope === "global") {
+          console.error("❌ Cannot delete the 'global' scope. It is system-reserved.");
+          console.error("   Use --all to delete every scope except global.");
+          process.exit(1);
+        }
+        scopesToDelete = [scope];
+      }
+
+      // Check if any scope has memories
+      if (scopesToDelete.every((s) => (stats.scopeCounts[s] || 0) === 0)) {
+        console.log("All target scopes have no memories. Nothing to delete.");
         process.exit(0);
       }
 
+      // Calculate totals for display
+      const totalCount = scopesToDelete.reduce((sum, s) => sum + (stats.scopeCounts[s] || 0), 0);
+
       if (opts.dryRun) {
-        console.log(`DRY RUN: Would delete ${count} memories from scope "${scope}".`);
+        if (opts.all) {
+          console.log(`DRY RUN: Would delete ${totalCount} memories across ${scopesToDelete.length} scope(s):`);
+          for (const s of scopesToDelete) {
+            console.log(`  - ${s}: ${stats.scopeCounts[s] || 0} memories`);
+          }
+        } else {
+          console.log(`DRY RUN: Would delete ${totalCount} memories from scope "${scopesToDelete[0]}".`);
+        }
         process.exit(0);
       }
 
       if (!opts.yes) {
-        console.log(`⚠  This will permanently delete ${count} memories from scope "${scope}".`);
-        console.log("   Run with --yes to confirm, or --dry-run to preview.");
+        if (opts.all) {
+          console.log(`⚠  This will permanently delete ${totalCount} memories across ${scopesToDelete.length} scope(s):`);
+          for (const s of scopesToDelete) {
+            console.log(`   - ${s}: ${stats.scopeCounts[s] || 0} memories`);
+          }
+          console.log("");
+          console.log("   Run with --yes to confirm, or --dry-run to preview.");
+        } else {
+          console.log(`⚠  This will permanently delete ${totalCount} memories from scope "${scopesToDelete[0]}".`);
+          console.log("   Run with --yes to confirm, or --dry-run to preview.");
+        }
         process.exit(0);
       }
 
-      const deleted = await store.bulkDelete([scope]);
-      console.log(`✅ Deleted ${deleted} memories from scope "${scope}".`);
+      const deleted = await store.bulkDelete(scopesToDelete);
+      if (opts.all) {
+        console.log(`✅ Deleted ${deleted} memories across ${scopesToDelete.length} scope(s).`);
+      } else {
+        console.log(`✅ Deleted ${deleted} memories from scope "${scopesToDelete[0]}".`);
+      }
       process.exit(0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
