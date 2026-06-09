@@ -21,21 +21,22 @@ bash install-latest.sh
 ### 配置
 
 ```bash
-# 初始化配置文件
+# 初始化配置文件（生成 ~/.config/memory-mcp/config.yaml）
 mem config init
 
 # 编辑配置文件，填入 API 密钥
 vim ~/.config/memory-mcp/config.yaml
 ```
 
-**配置示例**：
+**最简配置**（仅需填入 API Key）：
 ```yaml
 embedding:
-  apiKey: "${OPENAI_API_KEY}"
+  apiKey: "${OPENAI_API_KEY}"   # 必填！替换为你的 API Key
   model: "text-embedding-3-small"
   baseURL: "https://api.openai.com/v1"
-  dimensions: 1536
 ```
+
+> 完整的初始配置模板和逐字段说明，请查看 [配置指南](docs/config/README.md)。
 
 ### 启动服务
 
