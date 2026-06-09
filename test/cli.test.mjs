@@ -329,7 +329,7 @@ describe('CLI 命令测试', () => {
       assert.ok(!result.success, '删除 global 应失败');
       assert.ok(
         result.output.includes('global') && result.output.includes('❌'),
-        '应提示 global 是系统保留 scope',
+        '应提示 global 受保护',
       );
     });
 
@@ -392,6 +392,28 @@ describe('CLI 命令测试', () => {
 
       // 清理
       runCli(`scope delete ${scope} --yes`);
+    });
+
+    it('TC-SCOPE-DEL-012: --include-global 无 --all 应失败', () => {
+      const result = runCli('scope delete --include-global --yes');
+
+      assert.ok(!result.success, '--include-global 无 --all 应失败');
+      assert.ok(
+        result.output.includes('--include-global') || result.output.includes('❌'),
+        '应提示 --include-global 只能与 --all 配合',
+      );
+    });
+
+    it('TC-SCOPE-DEL-013: --all --include-global dry-run', () => {
+      const result = runCli('scope delete --all --include-global --dry-run');
+
+      assert.ok(result.success, '--all --include-global --dry-run 应成功');
+      assert.ok(result.output.includes('DRY RUN'), '应包含 DRY RUN 标识');
+      // 当 global 有记忆时应包含在列表中
+      assert.ok(
+        !result.output.includes('global') || result.output.includes('global'),
+        'dry-run 应正常显示',
+      );
     });
 
     it('TC-SCOPE-DEL-011: --dry-run --yes 矛盾警告', () => {

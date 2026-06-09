@@ -826,7 +826,8 @@ scopeCmd
 scopeCmd
   .command("delete [scopes...]")
   .description("Delete all memories in one or more scopes, or use --all to clear all scopes (requires confirmation)")
-  .option("--all", "Delete all scopes (except global)")
+  .option("--all", "Delete all scopes (except global unless --include-global)")
+  .option("--include-global", "Include global scope when used with --all")
   .option("--yes", "Skip confirmation prompt")
   .option("--dry-run", "Show what would be deleted without actually deleting")
   .option("--config <path>", "Config file path")
@@ -835,7 +836,7 @@ scopeCmd
       if (scopes.length === 0 && !opts.all) {
         console.error("❌ Must specify at least one scope or use --all.");
         console.error("   Usage: mem scope delete <scope> [scope2 ...]");
-        console.error("          mem scope delete --all");
+        console.error("          mem scope delete --all [--include-global]");
         process.exit(1);
       }
 
@@ -843,7 +844,14 @@ scopeCmd
       if (opts.all && scopes.length > 0) {
         console.error("❌ Cannot specify scopes together with --all.");
         console.error("   Use either: mem scope delete <scope> [scope2 ...]");
-        console.error("          or:  mem scope delete --all");
+        console.error("          or:  mem scope delete --all [--include-global]");
+        process.exit(1);
+      }
+
+      // --include-global only valid with --all
+      if (opts.includeGlobal && !opts.all) {
+        console.error("❌ --include-global can only be used with --all.");
+        console.error("   Usage: mem scope delete --all --include-global");
         process.exit(1);
       }
 
@@ -860,16 +868,19 @@ scopeCmd
       // Determine which scopes to delete
       let scopesToDelete: string[];
       if (opts.all) {
-        scopesToDelete = Object.keys(stats.scopeCounts).filter((s) => s !== "global");
+        scopesToDelete = Object.keys(stats.scopeCounts).filter((s) =>
+          opts.includeGlobal ? true : s !== "global",
+        );
         if (scopesToDelete.length === 0) {
           console.log("No scopes to delete (all memories are in global).");
+          console.log("   Use --include-global to also delete global.");
           process.exit(0);
         }
       } else {
         // Validate no global in the list
         if (scopes.includes("global")) {
-          console.error("❌ Cannot delete the 'global' scope. It is system-reserved.");
-          console.error("   Use --all to delete every scope except global.");
+          console.error("❌ Cannot delete the 'global' scope directly.");
+          console.error("   Use --all --include-global to delete all scopes including global.");
           process.exit(1);
         }
         // Deduplicate scopes
@@ -919,6 +930,10 @@ scopeCmd
         console.log(`⚠  This will permanently delete ${totalCount} memories across ${scopesToDelete.length} scope(s):`);
         for (const s of scopesToDelete) {
           console.log(`   - ${s}: ${scopeCounts[s] || 0} memories`);
+        }
+        if (scopesToDelete.includes("global")) {
+          console.log("");
+          console.log("   ⚠ WARNING: global is system-reserved and will be included in this deletion.");
         }
         console.log("");
         console.log("   Run with --yes to confirm, or --dry-run to preview.");
