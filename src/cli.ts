@@ -17,7 +17,7 @@
 import { Command } from "commander";
 import { startMcpServer } from "./mcp-server.js";
 import { startSseServer } from "./mcp-server-sse.js";
-import { createMemoryRuntime, normalizeTags } from "./index.js";
+import { createMemoryRuntime, normalizeTags, type MemoryRuntime } from "./index.js";
 import { initConfig, getConfigPath, loadConfig, getDefaultConfigDir } from "./config.js";
 import YAML from "yaml";
 import { existsSync, readFileSync } from "node:fs";
@@ -53,17 +53,22 @@ function resolveDbPath(dbPath: string | undefined): string {
   return resolve(raw);
 }
 
-/** Dynamically load MemoryStore from npm package (with local dist fallback) */
-async function loadMemoryStore(): Promise<new (opts: { dbPath: string; vectorDim: number }) => {
+type MemoryStoreType = new (opts: { dbPath: string; vectorDim: number }) => {
   stats: () => Promise<{ scopeCounts: Record<string, number>; totalCount: number }>;
   bulkDelete: (scope: string[], ts?: number) => Promise<number>;
-}> {
+  store: (entry: Record<string, unknown>) => Promise<{ id: string }>;
+  getById: (id: string, scopeFilter?: string[]) => Promise<{ id: string } | null>;
+  delete: (id: string, scopeFilter?: string[]) => Promise<boolean>;
+};
+
+/** Dynamically load MemoryStore from npm package (with local dist fallback) */
+async function loadMemoryStore(): Promise<MemoryStoreType> {
   const jiti = createJiti(import.meta.url);
   try {
-    return jiti("memory-lancedb-pro/src/store").MemoryStore as never;
+    return jiti("memory-lancedb-pro/src/store").MemoryStore as MemoryStoreType;
   } catch {
     // @ts-ignore - fallback to local dist for development
-    return (await import("../../dist/src/store.js")).MemoryStore as never;
+    return (await import("../../dist/src/store.js")).MemoryStore as MemoryStoreType;
   }
 }
 
@@ -573,8 +578,9 @@ program
       }
 
       // Check 5: Plugin loads
+      let runtime: MemoryRuntime | null = null;
       try {
-        const runtime = await createMemoryRuntime({ config, quiet: true });
+        runtime = await createMemoryRuntime({ config, quiet: true });
         const tools = runtime.listTools();
         console.log(`✅ Plugin loaded: ${tools.length} tools registered`);
         passed++;
@@ -586,6 +592,171 @@ program
         console.log(`❌ Plugin load failed: ${err instanceof Error ? err.message : err}`);
         failed++;
       }
+
+      // ====================================================================
+      // Connectivity Tests (Checks 7-10)
+      // Verify that configured external services are actually reachable.
+      // Uses jiti to dynamically import plugin internals for standalone tests.
+      // ====================================================================
+
+      // Check 7: Embedding API — call the embedding service directly
+      try {
+        const embedJiti = createJiti(import.meta.url);
+        const { createEmbedder } = embedJiti("memory-lancedb-pro/src/embedder") as {
+          createEmbedder: (cfg: Record<string, unknown>) => { test(): Promise<{ success: boolean; error?: string; dimensions?: number }> };
+        };
+        const embedConfig: Record<string, unknown> = {
+          provider: (config.embedding.provider as string) || "openai-compatible",
+          apiKey: config.embedding.apiKey,
+          model: (config.embedding.model as string) || "text-embedding-3-small",
+          chunking: false, // disable chunking for a single-word test
+        };
+        if (config.embedding.baseURL) embedConfig.baseURL = config.embedding.baseURL;
+        // Explicit dimensions are required for models not in the built-in EMBEDDING_DIMENSIONS table
+        if (config.embedding.dimensions !== undefined) embedConfig.dimensions = config.embedding.dimensions;
+        const embModel = embedConfig.model;
+
+        const embedder = createEmbedder(embedConfig);
+        const embStart = Date.now();
+        const embResult = await embedder.test();
+        const embMs = Date.now() - embStart;
+        if (embResult.success) {
+          console.log(`✅ Embedding API (${embModel}): OK (${embResult.dimensions}-dim vector, ${embMs}ms)`);
+          passed++;
+        } else {
+          console.log(`❌ Embedding API (${embModel}): ${embResult.error}`);
+          failed++;
+        }
+      } catch (err) {
+        console.log(`❌ Embedding API: ${err instanceof Error ? err.message : err}`);
+        failed++;
+      }
+
+      // Check 8: LanceDB read/write — store, read-back, delete a test entry
+      try {
+        const dbPath = resolveDbPath(config.dbPath);
+        const vectorDim = config.embedding?.dimensions || 1536;
+        const MemoryStore = await loadMemoryStore();
+        const store = new MemoryStore({ dbPath, vectorDim });
+        const zeroVector = new Array(vectorDim).fill(0);
+
+        const dbStart = Date.now();
+        const entry = await store.store({
+          text: "_doctor_connectivity_test_",
+          vector: zeroVector,
+          category: "other",
+          scope: "_doctor_test_",
+          importance: 0,
+        });
+        const readBack = await store.getById(entry.id, ["_doctor_test_"]);
+        await store.delete(entry.id, ["_doctor_test_"]);
+        const dbMs = Date.now() - dbStart;
+
+        if (readBack && readBack.id === entry.id) {
+          console.log(`✅ LanceDB read/write: OK (${dbMs}ms) [test data cleaned up]`);
+          passed++;
+        } else {
+          console.log(`❌ LanceDB: write succeeded but read-back verification failed`);
+          failed++;
+        }
+      } catch (err) {
+        console.log(`❌ LanceDB: ${err instanceof Error ? err.message : err}`);
+        failed++;
+      }
+
+      // Check 9: LLM connectivity — only if smartExtraction is enabled AND llm model explicitly configured
+      if (config.smartExtraction === false) {
+        console.log(`⏭️  LLM: smartExtraction disabled, skipping`);
+      } else if (!config.llm?.model) {
+        console.log(`⏭️  LLM: no explicit llm.model configured, skipping (plugin auto-detects model at runtime)`);
+      } else {
+        try {
+          const llmJiti = createJiti(import.meta.url);
+          const { createLlmClient } = llmJiti("memory-lancedb-pro/src/llm-client") as {
+            createLlmClient: (cfg: Record<string, unknown>) => {
+              completeJson<T>(prompt: string, label?: string): Promise<T | null>;
+              getLastError(): string | null;
+            };
+          };
+          const llmModel = config.llm.model as string;
+          const llmApiKey = typeof config.embedding.apiKey === "string"
+            ? config.embedding.apiKey
+            : (Array.isArray(config.embedding.apiKey) ? config.embedding.apiKey[0] : undefined);
+          const llmConfig: Record<string, unknown> = {
+            apiKey: (config.llm?.apiKey as string) || llmApiKey,
+            model: llmModel,
+            timeoutMs: 15000,
+          };
+          if (config.llm?.baseURL || config.embedding.baseURL) {
+            llmConfig.baseURL = (config.llm?.baseURL as string) || (config.embedding.baseURL as string);
+          }
+
+          const llmClient = createLlmClient(llmConfig);
+          const llmStart = Date.now();
+          const llmResult = await llmClient.completeJson<{ status: string }>(
+            'Reply with EXACTLY the JSON: {"status":"ok"}',
+            "doctor-llm-test",
+          );
+          const llmMs = Date.now() - llmStart;
+          if (llmResult && llmResult.status === "ok") {
+            console.log(`✅ LLM (${llmModel}): OK (${llmMs}ms)`);
+            passed++;
+          } else if (llmResult) {
+            console.log(`⚠️  LLM (${llmModel}): responded but unexpected output (${llmMs}ms)`);
+            passed++;
+          } else {
+            const lastErr = llmClient.getLastError();
+            console.log(`❌ LLM (${llmModel}): ${lastErr || "no response"} (${llmMs}ms)`);
+            failed++;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("AbortError")) {
+            console.log(`⚠️  LLM: timed out (>15s), service may be slow but config is likely correct`);
+          } else {
+            console.log(`❌ LLM: ${msg}`);
+            failed++;
+          }
+        }
+      }
+
+      // Check 10: Rerank API — test via memory_recall if rerank is configured
+      try {
+        const rerankMode = (config.retrieval as Record<string, unknown> | undefined)?.rerank as string | undefined;
+        if (!rerankMode || rerankMode === "none") {
+          console.log(`⏭️  Rerank: disabled (mode=none or unset), skipping`);
+        } else {
+          const rerankApiKey = (config.retrieval as Record<string, unknown> | undefined)?.rerankApiKey as string | undefined;
+          if (!rerankApiKey || String(rerankApiKey).length === 0) {
+            console.log(`ℹ️  Rerank: using lightweight cosine fallback (no API key configured)`);
+          } else if (!runtime) {
+            console.log(`⏭️  Rerank: skipped (plugin not loaded, cannot run recall)`);
+          } else {
+            const rerankStart = Date.now();
+            const recallResult = await runtime.callTool("memory_recall", {
+              query: "doctor connectivity test rerank",
+              limit: 3,
+            }, { agentId: "system" });
+            const rerankMs = Date.now() - rerankStart;
+            const hasError = recallResult.content.some(
+              (c: { type: string; text: string }) =>
+                typeof c.text === "string" && /Error/i.test(c.text),
+            );
+            const provider = (config.retrieval as Record<string, unknown> | undefined)?.rerankProvider as string || "jina";
+            if (!hasError) {
+              console.log(`✅ Rerank API (${provider}): OK (${rerankMs}ms)`);
+              passed++;
+            } else {
+              console.log(`❌ Rerank API (${provider}): recall returned error (${rerankMs}ms)`);
+              failed++;
+            }
+          }
+        }
+      } catch (err) {
+        console.log(`❌ Rerank API: ${err instanceof Error ? err.message : err}`);
+        failed++;
+      }
+
     } catch (err) {
       console.log(`❌ Config error: ${err instanceof Error ? err.message : err}`);
       failed++;
