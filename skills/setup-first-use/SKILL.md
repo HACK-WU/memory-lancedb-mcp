@@ -151,6 +151,8 @@ embedding:
 
 **场景 C：Ollama（本地，免费）**
 
+> 前提：Ollama 已安装且目标模型已拉取（`ollama pull nomic-embed-text`）
+
 ```yaml
 embedding:
   apiKey: ""
@@ -268,11 +270,16 @@ mem delete <memory-id>
   "mcpServers": {
     "memory": {
       "command": "mem",
-      "args": ["serve"]
+      "args": ["serve"],
+      "env": {
+        "OPENAI_API_KEY": "sk-..."
+      }
     }
   }
 }
 ```
+
+> **注意**：stdio 模式下，MCP 客户端以子进程方式启动 `mem serve`，环境变量通过 `env` 字段传入。配置文件中引用的 `${OPENAI_API_KEY}` 会从这些环境变量中解析。
 
 ### SSE 模式（远程/多客户端）
 
@@ -355,24 +362,50 @@ http://your-server:3100/sse?token=your-secret-token
 
 > 客户端提取 token 优先级：`Authorization: Bearer xxx` Header > `?token=xxx` Query 参数
 
+#### 生产环境建议
+
+SSE 模式默认使用 HTTP，在生产环境建议在前面加一层反向代理（如 Nginx/Caddy）提供 HTTPS：
+
+```
+Client ──HTTPS──▶ Nginx/Caddy ──HTTP──▶ mem serve --sse --host 127.0.0.1 --port 3100
+```
+
+**Nginx 示例**：
+```nginx
+location /sse {
+    proxy_pass http://127.0.0.1:3100/sse;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+    proxy_buffering off;
+    proxy_cache off;
+    # 透传客户端 Authorization header
+    proxy_set_header Authorization $http_authorization;
+}
+```
+
+> 使用反向代理时，`mem serve` 只需绑定 `127.0.0.1`，无需配置鉴权 token（由 Nginx 处理 TLS + 可选的访问控制）。
+
 ### 验证 MCP 连接
 
-在客户端中尝试调用 `memory_store` 或 `memory_recall`，确认工具列表中出现了 17 个 memory_* 工具。
+在客户端中尝试调用 `memory_store` 或 `memory_recall`，确认工具列表中出现了 memory_* 系列工具（通常 14+ 个）。
 
 ---
 
 ## 环境变量持久化
 
-如果使用环境变量引用 API Key，确保它们持久化：
+如果使用环境变量引用 API Key，确保它们持久化（否则新开的终端会找不到变量）：
 
 ```bash
-# 添加到 shell 配置文件
+# 添加到 shell 配置文件（推荐）
 echo 'export OPENAI_API_KEY="sk-..."' >> ~/.bashrc
 source ~/.bashrc
 
-# 或使用 .env 文件
-echo 'OPENAI_API_KEY=sk-...' >> ~/.env
+# 如果用 zsh
+echo 'export OPENAI_API_KEY="sk-..."' >> ~/.zshrc
+source ~/.zshrc
 ```
+
+> **注意**：`mem serve` 以 stdio 模式运行时，环境变量由 MCP 客户端（如 Claude Desktop）传入，需在客户端的 `env` 字段中配置，而非 shell 配置文件。
 
 ---
 
@@ -382,7 +415,9 @@ echo 'OPENAI_API_KEY=sk-...' >> ~/.env
 2. **Rerank 可后补**：初始配置可跳过 Rerank，后续在 `retrieval` 段添加即可
 3. **配置修改后需重启**：MCP Server 不会热重载配置，修改后需重启 `mem serve`
 4. **多项目隔离**：如需多项目隔离，在 `scopes.definitions` 中添加 scope 定义
-5. **Ollama 需先拉模型**：使用 Ollama 前需执行 `ollama pull nomic-embed-text`
+5. **Ollama 需先拉模型**：使用 Ollama 前需执行 `ollama pull <model-name>`
+6. **stdio 环境变量**：stdio 模式下，配置文件的 `${ENV_VAR}` 从 MCP 客户端的 `env` 字段解析，不是从 shell 环境
+7. **SSE 远程部署**：生产环境建议使用反向代理（Nginx/Caddy）提供 HTTPS，`mem serve` 仅绑定 `127.0.0.1`
 
 ---
 

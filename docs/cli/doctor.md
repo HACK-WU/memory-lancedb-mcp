@@ -35,7 +35,7 @@ mem doctor --config /path/to/config.yaml
 ✅ Config parses OK
 ✅ Embedding API key present
 ✅ Rerank: cross-encoder (provider=jina, apiKey=present)
-✅ Plugin loaded (12 tools registered)
+✅ Plugin loaded (14 tools registered)
 ✅ Tools: memory_store, memory_recall, memory_forget, memory_update, ...
 ✅ Embedding API: OK (342ms, dim=1536)
 ✅ LanceDB read/write: OK (15ms) [test data cleaned up]
@@ -53,7 +53,7 @@ Results: 8 passed, 0 failed
 ✅ Config parses OK
 ✅ Embedding API key present
 ⚠️  Rerank: cross-encoder (provider=jina, apiKey=not set — lightweight fallback)
-✅ Plugin loaded (12 tools registered)
+✅ Plugin loaded (14 tools registered)
 ✅ Tools: memory_store, memory_recall, memory_forget, memory_update, ...
 ✅ Embedding API: OK (342ms, dim=1536)
 ✅ LanceDB read/write: OK (15ms) [test data cleaned up]
@@ -128,7 +128,7 @@ Results: 2 passed, 1 failed, 1 warning(s)
 
 | 状态 | 输出 |
 |------|------|
-| ✅ 通过 | `Plugin loaded (12 tools registered)` |
+| ✅ 通过 | `Plugin loaded (N tools registered)` |
 | ❌ 失败 | `Plugin load failed: ...` — 检查依赖是否完整 |
 
 ### Check 6：工具注册
@@ -204,7 +204,7 @@ Results: 2 passed, 1 failed, 1 warning(s)
 ### 安装后验证
 
 ```bash
-mem init && mem doctor
+mem config init && mem doctor
 ```
 
 ### 修改配置后验证
