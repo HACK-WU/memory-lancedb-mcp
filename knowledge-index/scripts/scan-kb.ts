@@ -21,6 +21,7 @@ import { CURRENT_DATA_VERSION } from './lib/constants.js';
 import { handleImport } from './lib/import.js';
 import { handleIncremental } from './lib/incremental.js';
 import { handleDiff } from './lib/diff.js';
+import { normalizeAiResults, type ScanResultEntry as AiResultEntry } from './lib/ai-results.js';
 
 const MAX_SCAN_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -685,7 +686,7 @@ const program = new Command();
 
 program
   .name('scan-kb')
-  .description('外部知识库扫描与导入：scan / import / diff');
+  .description('外部知识库扫描与导入：scan / import / diff / validate');
 
 program
   .command('scan')
@@ -831,6 +832,92 @@ program
     } catch (err) {
       output({ ok: false, error: (err as Error).message });
       process.exit(1);
+    }
+  });
+
+// ─── validate：校验 ai-results.json 格式 ──────────────────────────────
+
+interface ValidateStats {
+  totalEntries: number;
+  addCount: number;
+  modifyCount: number;
+  deleteCount: number;
+  missingMemoryIdCount: number;
+  missingSummaryCount: number;
+  missingKeywordsCount: number;
+}
+
+function countEntryStats(entries: AiResultEntry[]): ValidateStats {
+  let addCount = 0;
+  let modifyCount = 0;
+  let deleteCount = 0;
+  let missingMemoryIdCount = 0;
+  let missingSummaryCount = 0;
+  let missingKeywordsCount = 0;
+
+  for (const entry of entries) {
+    if (entry.action === 'add') addCount++;
+    else if (entry.action === 'modify') modifyCount++;
+    else if (entry.action === 'delete') deleteCount++;
+    if (!entry.memoryId) missingMemoryIdCount++;
+    if (!entry.summary) missingSummaryCount++;
+    if (!entry.keywords || entry.keywords.length === 0) missingKeywordsCount++;
+  }
+
+  return {
+    totalEntries: entries.length,
+    addCount,
+    modifyCount,
+    deleteCount,
+    missingMemoryIdCount,
+    missingSummaryCount,
+    missingKeywordsCount,
+  };
+}
+
+program
+  .command('validate')
+  .description('校验 ai-results.json 文件格式是否正确（不执行导入）')
+  .requiredOption('--results <resultsFile>', 'AI 输出的 ai-results.json 路径')
+  .action((opts) => {
+    try {
+      const resultsFile = path.resolve(String(opts.results));
+
+      // 文件存在性检查
+      if (!fs.existsSync(resultsFile)) {
+        fail({ ok: false, error: `文件不存在: ${resultsFile}` });
+      }
+
+      // JSON 合法性检查
+      try {
+        const content = fs.readFileSync(resultsFile, 'utf-8');
+        JSON.parse(content);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        fail({ ok: false, error: `JSON 解析失败: ${resultsFile}\n${detail}` });
+      }
+
+      // 使用 normalizeAiResults 进行详细校验
+      try {
+        const result = normalizeAiResults(resultsFile);
+        const stats = countEntryStats(result.entries);
+        output({
+          ok: true,
+          action: 'validate',
+          file: resultsFile,
+          message: 'ai-results.json 格式正确',
+          stats,
+        });
+      } catch (err) {
+        fail({
+          ok: false,
+          action: 'validate',
+          file: resultsFile,
+          error: (err as Error).message,
+        });
+      }
+    } catch (err) {
+      fail({ ok: false, error: (err as Error).message });
     }
   });
 
