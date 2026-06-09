@@ -67,7 +67,7 @@ mem scope delete --all [options]
 | 选项 | 说明 | 默认值 |
 |------|------|--------|
 | `--all` | 删除所有 scope（global 除外，除非配合 `--include-global`） | 无 |
-| `--include-global` | 与 `--all` 配合时，也删除 global scope | 无 |
+| `--include-global` | 允许删除 global scope（与 `--all` 或显式指定 `global` 配合） | 无 |
 | `--dry-run` | 预览将删除的数量，不实际删除 | 无 |
 | `--yes` | 跳过确认，直接删除 | 无 |
 | `--config <path>` | 指定配置文件路径 | 无 |
@@ -92,6 +92,9 @@ mem scope delete --all --yes
 
 # 清除所有 scope（包括 global）
 mem scope delete --all --include-global --yes
+
+# 单独删除 global scope
+mem scope delete global --include-global --yes
 
 # 预览全部清除范围
 mem scope delete --all --dry-run
@@ -131,10 +134,10 @@ DRY RUN: Would delete 42 memories across 1 scope(s):
 ### 注意事项
 
 - `global` scope 是系统保留 scope，默认无法删除
-- 需要删除 global 时，必须使用 `--all --include-global --yes`
+- 需要删除 global 时，必须使用 `--include-global` 标志：`mem scope delete global --include-global --yes`
+- 或使用 `--all --include-global --yes` 删除所有 scope 包括 global
 - 指定不存在的 scope 会显示警告
 - `--all` 与指定 scope 不能同时使用
-- `--include-global` 只能与 `--all` 配合使用
 - 重复的 scope 名会自动去重
 
 ## Scope 概念
@@ -334,19 +337,16 @@ mem doctor
 
 **症状**：
 ```
-❌ Cannot delete the 'global' scope directly.
+❌ Cannot delete the 'global' scope.
 ```
 
 **解决**：
 ```bash
-# 使用 --all --include-global 删除所有 scope（含 global）
+# 使用 --include-global 标志删除 global
+mem scope delete global --include-global --yes
+
+# 或使用 --all --include-global 删除所有 scope（含 global）
 mem scope delete --all --include-global --yes
-
-# 或使用 --all 删除除 global 外的所有 scope
-mem scope delete --all --yes
-
-# 或指定具体 scope
-mem scope delete project:old --yes
 ```
 
 ### Scope 不匹配

@@ -827,7 +827,7 @@ scopeCmd
   .command("delete [scopes...]")
   .description("Delete all memories in one or more scopes, or use --all to clear all scopes (requires confirmation)")
   .option("--all", "Delete all scopes (except global unless --include-global)")
-  .option("--include-global", "Include global scope when used with --all")
+  .option("--include-global", "Allow deleting the global scope")
   .option("--yes", "Skip confirmation prompt")
   .option("--dry-run", "Show what would be deleted without actually deleting")
   .option("--config <path>", "Config file path")
@@ -845,13 +845,6 @@ scopeCmd
         console.error("❌ Cannot specify scopes together with --all.");
         console.error("   Use either: mem scope delete <scope> [scope2 ...]");
         console.error("          or:  mem scope delete --all [--include-global]");
-        process.exit(1);
-      }
-
-      // --include-global only valid with --all
-      if (opts.includeGlobal && !opts.all) {
-        console.error("❌ --include-global can only be used with --all.");
-        console.error("   Usage: mem scope delete --all --include-global");
         process.exit(1);
       }
 
@@ -873,14 +866,14 @@ scopeCmd
         );
         if (scopesToDelete.length === 0) {
           console.log("No scopes to delete (all memories are in global).");
-          console.log("   Use --include-global to also delete global.");
+          console.log("   Use --include-global to delete global as well.");
           process.exit(0);
         }
       } else {
-        // Validate no global in the list
-        if (scopes.includes("global")) {
-          console.error("❌ Cannot delete the 'global' scope directly.");
-          console.error("   Use --all --include-global to delete all scopes including global.");
+        // Validate global is only allowed with --include-global
+        if (scopes.includes("global") && !opts.includeGlobal) {
+          console.error("❌ Cannot delete the 'global' scope.");
+          console.error("   Add --include-global to confirm: mem scope delete global --include-global");
           process.exit(1);
         }
         // Deduplicate scopes

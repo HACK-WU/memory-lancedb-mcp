@@ -323,13 +323,13 @@ describe('CLI 命令测试', () => {
       runCli(`scope delete ${scope} --yes`);
     });
 
-    it('TC-SCOPE-DEL-005: 保护 global scope', () => {
+    it('TC-SCOPE-DEL-005: 保护 global scope（无 --include-global）', () => {
       const result = runCli('scope delete global --yes');
 
-      assert.ok(!result.success, '删除 global 应失败');
+      assert.ok(!result.success, '删除 global 无 --include-global 应失败');
       assert.ok(
         result.output.includes('global') && result.output.includes('❌'),
-        '应提示 global 受保护',
+        '应提示需要 --include-global',
       );
     });
 
@@ -411,14 +411,12 @@ describe('CLI 命令测试', () => {
       runCli(`scope delete ${scope} --yes`);
     });
 
-    it('TC-SCOPE-DEL-012: --include-global 无 --all 应失败', () => {
-      const result = runCli('scope delete --include-global --yes');
+    it('TC-SCOPE-DEL-012: global + --include-global 可单独删除 global', () => {
+      const result = runCli('scope delete global --include-global --dry-run');
 
-      assert.ok(!result.success, '--include-global 无 --all 应失败');
-      assert.ok(
-        result.output.includes('--include-global') || result.output.includes('❌'),
-        '应提示 --include-global 只能与 --all 配合',
-      );
+      assert.ok(result.success, 'global --include-global --dry-run 应成功');
+      assert.ok(result.output.includes('DRY RUN'), '应包含 DRY RUN 标识');
+      assert.ok(result.output.includes('global'), '应列出 global scope');
     });
 
     it('TC-SCOPE-DEL-013: --all --include-global dry-run', () => {
@@ -427,6 +425,19 @@ describe('CLI 命令测试', () => {
       assert.ok(result.success, '--all --include-global --dry-run 应成功');
       assert.ok(result.output.includes('DRY RUN'), '应包含 DRY RUN 标识');
       // dry-run 应正常执行，无报错即可
+    });
+
+    it('TC-SCOPE-DEL-014: global + 其他 scope + --include-global', () => {
+      const scope = `${TEST_SCOPE_PREFIX}:with-global`;
+      runCli(`store "与 global 一起删除测试" --scope ${scope}`);
+
+      const result = runCli(`scope delete global ${scope} --include-global --dry-run`);
+      assert.ok(result.success, 'global + 其他 scope + --include-global 应成功');
+      assert.ok(result.output.includes('global'), '应列出 global scope');
+      assert.ok(result.output.includes(scope), '应列出其他 scope');
+
+      // 清理
+      runCli(`scope delete ${scope} --yes`);
     });
   });
   
