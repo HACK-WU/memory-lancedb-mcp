@@ -136,6 +136,18 @@ mem delete <uuid>
 # 删除整个 scope
 mem scope delete project:old --yes
 
+# 同时删除多个 scope
+mem scope delete project:old project:deprecated --yes
+
+# 清除所有 scope（global 除外）
+mem scope delete --all --yes
+
+# 清除所有 scope（包括 global）
+mem scope delete --all --include-global --yes
+
+# 预览删除范围
+mem scope delete project:old --dry-run
+
 # 而不是逐个删除
 mem delete <uuid1>
 mem delete <uuid2>
