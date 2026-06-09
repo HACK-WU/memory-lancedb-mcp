@@ -258,6 +258,10 @@ autoCapture: true
 # Auto-recall: inject memories before agent processing
 # In MCP mode, recommend letting Agent call memory_recall explicitly
 autoRecall: false
+# autoRecallMinLength: 10
+# autoRecallMaxItems: 10
+# autoRecallMaxChars: 4000
+# autoRecallTimeoutMs: 2000
 
 # Smart extraction: LLM-powered 6-category classification
 smartExtraction: true
@@ -266,6 +270,14 @@ extractMaxChars: 8000
 
 # Management tools (memory_stats, memory_list, etc.)
 enableManagementTools: true
+
+# Capture assistant: auto-extract from assistant messages too (default: true)
+# captureAssistant: true
+
+# Markdown mirror: export memories as .md files for human browsing
+# mdMirror:
+#   enabled: false
+#   dir: "~/.local/share/memory-mcp/mirror"
 
 # Session strategy (none recommended for MCP mode)
 sessionStrategy: "none"
@@ -321,6 +333,11 @@ retrieval:
 
   # Rerank API timeout in ms (default: 5000)
   # rerankTimeoutMs: 5000
+
+  # --- Candidate pool and recency tuning ---
+  # candidatePoolSize: 50
+  # recencyHalfLifeDays: 30
+  # recencyWeight: 0.1
 
 # Scope isolation
 scopes:
