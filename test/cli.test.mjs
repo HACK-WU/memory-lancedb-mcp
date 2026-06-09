@@ -264,23 +264,151 @@ describe('CLI 命令测试', () => {
     });
   });
   
-  describe('记忆清理命令', () => {
-    it('TC-CLEANUP-001: 清理指定 scope', () => {
-      // 先存储一些测试数据
-      const scope = `${TEST_SCOPE_PREFIX}:cleanup-test`;
-      runCli(`store "清理测试记忆 1，包含项目配置信息" --scope ${scope}`);
-      runCli(`store "清理测试记忆 2，包含用户偏好设置" --scope ${scope}`);
-      
-      // 清理
+  describe('scope delete 命令', () => {
+    it('TC-SCOPE-DEL-001: 删除指定 scope', () => {
+      const scope = `${TEST_SCOPE_PREFIX}:del-single`;
+      runCli(`store "单 scope 删除测试记忆" --scope ${scope}`);
+
       const result = runCli(`scope delete ${scope} --yes`);
-      
-      // 清理可能成功或失败（如果 scope 不存在）
+
+      assert.ok(result.success, '删除应成功');
       assert.ok(
-        result.success || 
-        result.output.includes('not found') ||
-        result.output.includes('不存在'),
-        '清理应成功或提示 scope 不存在'
+        result.output.includes('Deleted') || result.output.includes('✅'),
+        '应包含删除成功信息',
       );
+    });
+
+    it('TC-SCOPE-DEL-002: 删除多个 scope', () => {
+      const scope1 = `${TEST_SCOPE_PREFIX}:del-multi-a`;
+      const scope2 = `${TEST_SCOPE_PREFIX}:del-multi-b`;
+      runCli(`store "多 scope 删除测试 A" --scope ${scope1}`);
+      runCli(`store "多 scope 删除测试 B" --scope ${scope2}`);
+
+      const result = runCli(`scope delete ${scope1} ${scope2} --yes`);
+
+      assert.ok(result.success, '多 scope 删除应成功');
+      assert.ok(
+        result.output.includes('scope(s)') || result.output.includes('✅'),
+        '应包含多 scope 删除信息',
+      );
+    });
+
+    it('TC-SCOPE-DEL-003: --dry-run 预览', () => {
+      const scope = `${TEST_SCOPE_PREFIX}:dry-run-test`;
+      runCli(`store "dry-run 测试记忆" --scope ${scope}`);
+
+      const result = runCli(`scope delete ${scope} --dry-run`);
+
+      assert.ok(result.success, 'dry-run 应成功');
+      assert.ok(result.output.includes('DRY RUN'), '应包含 DRY RUN 标识');
+      assert.ok(!result.output.includes('Deleted'), 'dry-run 不应实际删除');
+
+      // 清理
+      runCli(`scope delete ${scope} --yes`);
+    });
+
+    it('TC-SCOPE-DEL-004: 交互模式（无 --yes）', () => {
+      const scope = `${TEST_SCOPE_PREFIX}:interactive-test`;
+      runCli(`store "交互模式测试记忆" --scope ${scope}`);
+
+      const result = runCli(`scope delete ${scope}`);
+
+      assert.ok(result.success, '交互模式应成功退出');
+      assert.ok(
+        result.output.includes('--yes') || result.output.includes('confirm'),
+        '应提示使用 --yes 确认',
+      );
+
+      // 清理
+      runCli(`scope delete ${scope} --yes`);
+    });
+
+    it('TC-SCOPE-DEL-005: 保护 global scope', () => {
+      const result = runCli('scope delete global --yes');
+
+      assert.ok(!result.success, '删除 global 应失败');
+      assert.ok(
+        result.output.includes('global') && result.output.includes('❌'),
+        '应提示 global 是系统保留 scope',
+      );
+    });
+
+    it('TC-SCOPE-DEL-006: 无参数报错', () => {
+      const result = runCli('scope delete');
+
+      assert.ok(!result.success, '无参数应失败');
+      assert.ok(result.output.includes('❌'), '应显示错误信息');
+    });
+
+    it('TC-SCOPE-DEL-007: --all 与指定 scope 冲突', () => {
+      const result = runCli(`scope delete ${TEST_SCOPE_PREFIX}:some-scope --all`);
+
+      assert.ok(!result.success, '--all 与 scope 同时指定应失败');
+      assert.ok(
+        result.output.includes('Cannot specify scopes together with --all') ||
+        result.output.includes('❌'),
+        '应提示冲突',
+      );
+    });
+
+    it('TC-SCOPE-DEL-008: 不存在的 scope', () => {
+      const result = runCli(`scope delete ${TEST_SCOPE_PREFIX}:nonexistent-scope-xyz --yes`);
+
+      // 可能成功但提示无记忆，或警告 unknown scope
+      assert.ok(result.success, '不存在的 scope 应正常退出');
+      assert.ok(
+        result.output.includes('no memories') ||
+        result.output.includes('Unknown') ||
+        result.output.includes('Nothing to delete'),
+        '应提示无记忆或未知 scope',
+      );
+    });
+
+    it('TC-SCOPE-DEL-009: 重复 scope 去重', () => {
+      const scope = `${TEST_SCOPE_PREFIX}:dedup-test`;
+      runCli(`store "去重测试记忆" --scope ${scope}`);
+
+      const result = runCli(`scope delete ${scope} ${scope} --yes`);
+
+      assert.ok(result.success, '重复 scope 应成功');
+      // 去重后输出应显示 1 scope(s) 而非 2
+      assert.ok(
+        !result.output.includes('2 scope(s)') && !result.output.includes('across 2'),
+        '去重后不应显示 2 scope(s)',
+      );
+
+      // 清理（如果上面的删除因 scope 已不存在而跳过）
+      runCli(`scope delete ${scope} --yes`);
+    });
+
+    it('TC-SCOPE-DEL-010: --all 清除', () => {
+      // 先存储测试数据确保有非 global scope
+      const scope = `${TEST_SCOPE_PREFIX}:all-test`;
+      runCli(`store "all 测试记忆" --scope ${scope}`);
+
+      const dryResult = runCli('scope delete --all --dry-run');
+      assert.ok(dryResult.success, '--all --dry-run 应成功');
+      assert.ok(dryResult.output.includes('DRY RUN'), '应包含 DRY RUN 标识');
+
+      // 清理
+      runCli(`scope delete ${scope} --yes`);
+    });
+
+    it('TC-SCOPE-DEL-011: --dry-run --yes 矛盾警告', () => {
+      const scope = `${TEST_SCOPE_PREFIX}:contradiction-test`;
+      runCli(`store "矛盾标志测试记忆" --scope ${scope}`);
+
+      const result = runCli(`scope delete ${scope} --dry-run --yes`);
+
+      assert.ok(result.success, 'dry-run 模式应成功');
+      assert.ok(result.output.includes('DRY RUN'), '应包含 DRY RUN 标识');
+      assert.ok(
+        result.output.includes('contradictory') || result.output.includes('⚠'),
+        '应警告 --dry-run 和 --yes 矛盾',
+      );
+
+      // 清理
+      runCli(`scope delete ${scope} --yes`);
     });
   });
   

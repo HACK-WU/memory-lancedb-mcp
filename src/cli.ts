@@ -839,6 +839,14 @@ scopeCmd
         process.exit(1);
       }
 
+      // --all and explicit scopes are mutually exclusive
+      if (opts.all && scopes.length > 0) {
+        console.error("❌ Cannot specify scopes together with --all.");
+        console.error("   Use either: mem scope delete <scope> [scope2 ...]");
+        console.error("          or:  mem scope delete --all");
+        process.exit(1);
+      }
+
       const configPath = opts.config || getConfigPath();
       const config = loadConfig(configPath);
       const dbPath = resolveDbPath(config.dbPath);
@@ -864,15 +872,30 @@ scopeCmd
           console.error("   Use --all to delete every scope except global.");
           process.exit(1);
         }
-        scopesToDelete = scopes;
+        // Deduplicate scopes
+        scopesToDelete = [...new Set(scopes)];
       }
 
       // Build a local lookup for cleaner access
       const scopeCounts = stats.scopeCounts as Record<string, number>;
 
+      // Warn about contradictory flags
+      if (opts.dryRun && opts.yes) {
+        console.warn("⚠  --dry-run and --yes are contradictory; --dry-run takes precedence.");
+      }
+
+      // Warn about non-existent scopes
+      const knownScopes = new Set(Object.keys(scopeCounts));
+      const unknownScopes = scopesToDelete.filter((s) => !knownScopes.has(s));
+      if (unknownScopes.length > 0) {
+        console.warn(`⚠  Unknown scope(s) with no memories: ${unknownScopes.join(", ")}`);
+      }
+
       // Check if any scope has memories
       if (scopesToDelete.every((s) => (scopeCounts[s] || 0) === 0)) {
-        if (scopesToDelete.length === 1) {
+        if (unknownScopes.length > 0) {
+          // Unknown scope warning already implies "no memories", skip redundant message
+        } else if (scopesToDelete.length === 1) {
           console.log(`Scope "${scopesToDelete[0]}" has no memories. Nothing to delete.`);
         } else {
           console.log("All target scopes have no memories. Nothing to delete.");

@@ -13,7 +13,7 @@ mem scope <subcommand> [options]
 | 子命令 | 说明 |
 |--------|------|
 | `mem scope list` | 列出所有 scope |
-| `mem scope delete <scope>` | 删除 scope |
+| `mem scope delete [scopes...]` | 删除一个或多个 scope，或使用 `--all` 清除所有 |
 
 ## mem scope list
 
@@ -47,26 +47,29 @@ mem scope list | grep project:myapp
 
 ## mem scope delete
 
-删除 scope 及其所有记忆。
+删除一个或多个 scope 及其所有记忆。
 
 ### 语法
 
 ```bash
-mem scope delete <scope> [options]
+mem scope delete <scope> [scope2 ...] [options]
+mem scope delete --all [options]
 ```
 
 ### 参数
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `<scope>` | 要删除的 scope（必需） | 无 |
+| `[scopes...]` | 要删除的一个或多个 scope（至少需要一个，除非使用 `--all`；与 `--all` 互斥） | 无 |
 
 ### 选项
 
 | 选项 | 说明 | 默认值 |
 |------|------|--------|
+| `--all` | 删除所有 scope（global 除外） | 无 |
 | `--dry-run` | 预览将删除的数量，不实际删除 | 无 |
 | `--yes` | 跳过确认，直接删除 | 无 |
+| `--config <path>` | 指定配置文件路径 | 无 |
 
 ### 使用示例
 
@@ -74,34 +77,59 @@ mem scope delete <scope> [options]
 # 预览删除范围
 mem scope delete project:old --dry-run
 
-# 确认删除
+# 确认删除单个 scope
 mem scope delete project:old --yes
 
-# 交互式删除
+# 交互式删除（显示确认提示）
 mem scope delete project:old
+
+# 同时删除多个 scope
+mem scope delete project:old project:deprecated agent:bot1 --yes
+
+# 清除所有 scope（global 除外）
+mem scope delete --all --yes
+
+# 预览全部清除范围
+mem scope delete --all --dry-run
 ```
 
 ### 输出示例
 
-**预览模式**：
+**预览模式**（`--dry-run`）：
 ```
-Scope: project:old
-Memories to delete: 42
+DRY RUN: Would delete 42 memories across 1 scope(s):
+  - project:old: 42 memories
+```
 
-This will permanently delete all memories in this scope.
-Run with --yes to confirm deletion.
+**交互模式**（无 `--yes`）：
+```
+⚠  This will permanently delete 42 memories across 1 scope(s):
+   - project:old: 42 memories
+
+   Run with --yes to confirm, or --dry-run to preview.
 ```
 
 **确认删除**：
 ```
-Scope: project:old
-Memories to delete: 42
-
-Deleting scope and all memories...
-✅ Scope deleted successfully
-  Scope: project:old
-  Memories deleted: 42
+✅ Deleted 42 memories from scope "project:old".
 ```
+
+**多 scope 删除**：
+```
+✅ Deleted 65 memories across 2 scope(s).
+```
+
+**--all 清除**：
+```
+✅ Deleted 120 memories across 5 scope(s).
+```
+
+### 注意事项
+
+- `global` scope 是系统保留 scope，无法删除
+- 指定不存在的 scope 会显示警告
+- `--all` 与指定 scope 不能同时使用
+- 重复的 scope 名会自动去重
 
 ## Scope 概念
 
@@ -263,7 +291,7 @@ mem list --scope user:john
 
 **症状**：
 ```
-❌ Scope not found: project:nonexistent
+⚠  Unknown scope(s) with no memories: project:nonexistent
 ```
 
 **解决**：
@@ -283,9 +311,9 @@ mem store "初始化" --scope project:new
 ```
 
 **可能原因**：
-1. Scope 不存在
+1. 数据库文件损坏或锁定
 2. 权限问题
-3. 数据库错误
+3. 磁盘空间不足
 
 **解决**：
 ```bash
@@ -294,6 +322,22 @@ mem scope list
 
 # 健康检查
 mem doctor
+```
+
+### 误删 global scope
+
+**症状**：
+```
+❌ Cannot delete the 'global' scope. It is system-reserved.
+```
+
+**解决**：
+```bash
+# 使用 --all 删除除 global 外的所有 scope
+mem scope delete --all --yes
+
+# 或指定具体 scope
+mem scope delete project:old --yes
 ```
 
 ### Scope 不匹配

@@ -208,11 +208,17 @@ Scopes:
 # 预览删除范围（不实际删除）
 mem scope delete project:old --dry-run
 
-# 确认删除整个 scope
+# 确认删除单个 scope
 mem scope delete project:old --yes
+
+# 同时删除多个 scope
+mem scope delete project:old project:deprecated --yes
+
+# 清除所有 scope（global 除外）
+mem scope delete --all --yes
 ```
 
-**警告**：删除 scope 会永久删除该 scope 内所有记忆数据。
+**警告**：删除 scope 会永久删除该 scope 内所有记忆数据。`global` scope 为系统保留，无法删除。
 
 ### 删除记忆
 
