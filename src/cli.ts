@@ -154,7 +154,7 @@ program
         console.log(`\nTotal: ${tools.length} tools`);
         console.log(`Events: ${runtime.api.getRegisteredEvents().join(", ")}`);
         console.log(`Hooks: ${runtime.api.getRegisteredHooks().join(", ")}`);
-        return;
+        process.exit(0);
       }
 
       if (opts.sse) {
@@ -234,7 +234,7 @@ program
             console.log(item.text);
           }
         }
-        return;
+        process.exit(0);
       }
 
       const params: Record<string, unknown> = { limit, offset };
@@ -249,6 +249,7 @@ program
           console.log(item.text);
         }
       }
+      process.exit(0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -290,6 +291,7 @@ program
           console.log(item.text);
         }
       }
+      process.exit(0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -320,6 +322,7 @@ program
           console.log(item.text);
         }
       }
+      process.exit(0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -366,6 +369,11 @@ program
       if (storedId) {
         console.log(`Memory ID: ${storedId}`);
       }
+      // Force exit: createMemoryRuntime() initializes LanceDB connections and
+      // may trigger background tasks (e.g. auto-compaction via gateway_start)
+      // that keep the Node.js event loop alive. Without an explicit exit, the
+      // process hangs after completing the CLI operation.
+      process.exit(0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -387,6 +395,7 @@ program
       for (const item of result.content) {
         console.log(item.text);
       }
+      process.exit(0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -585,6 +594,7 @@ program
     console.log(`\n${"─".repeat(40)}`);
     console.log(`Results: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);
+    process.exit(0);
   });
 
 // ============================================================================
@@ -626,6 +636,7 @@ scopeCmd
 
       console.log("");
       console.log(`Total: ${stats.totalCount} memories across ${entries.length} scope(s)`);
+      process.exit(0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -658,22 +669,23 @@ scopeCmd
 
       if (count === 0) {
         console.log(`Scope "${scope}" has no memories. Nothing to delete.`);
-        return;
+        process.exit(0);
       }
 
       if (opts.dryRun) {
         console.log(`DRY RUN: Would delete ${count} memories from scope "${scope}".`);
-        return;
+        process.exit(0);
       }
 
       if (!opts.yes) {
         console.log(`⚠  This will permanently delete ${count} memories from scope "${scope}".`);
         console.log("   Run with --yes to confirm, or --dry-run to preview.");
-        return;
+        process.exit(0);
       }
 
       const deleted = await store.bulkDelete([scope]);
       console.log(`✅ Deleted ${deleted} memories from scope "${scope}".`);
+      process.exit(0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
