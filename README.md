@@ -123,6 +123,12 @@ memory-lancedb-mcp 适合需要**持久化长期记忆**的 AI 应用：
 - **AI 个人助理** — 记住日程偏好、饮食禁忌、旅行习惯
 - **AI 游戏 NPC** — 记住玩家行为、剧情走向、角色关系
 
+## 衍生项目
+
+| 项目 | 说明 |
+|------|------|
+| [knowledge-indexer](https://github.com/HACK-WU/knowledge-indexer) | 基于 memory-lancedb-mcp 构建的知识库索引工具，支持将本地文档（Markdown、PDF 等）批量向量化并存储到记忆库中，实现私有知识库的语义检索 |
+
 ## 贡献与许可
 
 欢迎贡献！请查看 [贡献指南](docs/development/contributing.md)。
