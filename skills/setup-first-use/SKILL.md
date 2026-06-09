@@ -276,12 +276,54 @@ mem delete <memory-id>
 
 ### SSE 模式（远程/多客户端）
 
+SSE 模式支持 Bearer Token 鉴权，**绑定非回环地址（如 `0.0.0.0`）时必须配置鉴权**，否则服务拒绝启动。
+
+#### 服务端启动
+
+**场景 A：本地访问（免鉴权，默认绑定 127.0.0.1）**
+
 ```bash
-# 启动 SSE 服务
 mem serve --sse --port 3100
+# 无需 token，仅本机可访问
 ```
 
-客户端配置：
+**场景 B：远程访问（必须鉴权）**
+
+```bash
+# 方式 1：通过 --auth-token 传入
+mem serve --sse --port 3100 --host 0.0.0.0 --auth-token "your-secret-token"
+
+# 方式 2：通过环境变量传入（推荐，避免 token 出现在进程列表中）
+export MEM_MCP_AUTH_TOKEN="your-secret-token"
+mem serve --sse --port 3100 --host 0.0.0.0
+
+# 方式 3：一次性生成随机 token 并启动
+MEM_MCP_AUTH_TOKEN=$(openssl rand -hex 24) mem serve --sse --port 3100 --host 0.0.0.0
+```
+
+> **Token 安全建议**：长度 >= 16 位随机字符串。服务端启动时若 token 长度 < 16 会打印 WARNING。
+
+#### 鉴权规则速查
+
+| 启动方式 | host | token | 行为 |
+|---------|------|-------|------|
+| `mem serve --sse` | `127.0.0.1` | 无 | ✅ 启动，免鉴权 |
+| `mem serve --sse --auth-token xxx` | `127.0.0.1` | 有 | ✅ 启动，启用鉴权 |
+| `mem serve --sse --host 0.0.0.0 --auth-token xxx` | `0.0.0.0` | 有 | ✅ 启动，启用鉴权 |
+| `mem serve --sse --host 0.0.0.0` | `0.0.0.0` | 无 | ❌ 拒绝启动 |
+| `mem serve --sse --host 0.0.0.0 --no-auth` | `0.0.0.0` | — | ❌ 拒绝启动 |
+
+> **Token 优先级**：`--auth-token` > `MEM_MCP_AUTH_TOKEN` 环境变量 > 无 token
+
+#### 鉴权保护范围
+
+启用鉴权后，所有 HTTP 请求均需携带 Bearer Token，仅以下请求豁免：
+- `GET /health` — 健康检查
+- `OPTIONS *` — CORS 预检请求
+
+#### 客户端配置
+
+**无鉴权（本地）**：
 ```json
 {
   "mcpServers": {
@@ -291,6 +333,27 @@ mem serve --sse --port 3100
   }
 }
 ```
+
+**有鉴权（远程）**：
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "url": "http://your-server:3100/sse",
+      "headers": {
+        "Authorization": "Bearer your-secret-token"
+      }
+    }
+  }
+}
+```
+
+**有鉴权（URL Query 参数方式，部分客户端不支持 headers）**：
+```
+http://your-server:3100/sse?token=your-secret-token
+```
+
+> 客户端提取 token 优先级：`Authorization: Bearer xxx` Header > `?token=xxx` Query 参数
 
 ### 验证 MCP 连接
 

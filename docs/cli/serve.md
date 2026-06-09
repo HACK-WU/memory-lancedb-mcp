@@ -125,7 +125,7 @@ Registered MCP tools:
 
 ## 客户端配置
 
-### Claude Desktop
+### Claude Desktop / Cursor（stdio 模式）
 
 ```json
 {
@@ -141,29 +141,27 @@ Registered MCP tools:
 }
 ```
 
-### Cursor
+### SSE 远程模式（无鉴权，本地）
 
 ```json
 {
   "mcpServers": {
     "memory": {
-      "command": "mem",
-      "args": ["serve"],
-      "env": {
-        "OPENAI_API_KEY": "sk-..."
-      }
+      "url": "http://localhost:3100/sse"
     }
   }
 }
 ```
 
-### SSE 远程模式
+### SSE 远程模式（有鉴权，远程）
+
+通过 `Authorization` Header 传入 Bearer Token：
 
 ```json
 {
   "mcpServers": {
     "memory": {
-      "url": "http://localhost:3100/sse",
+      "url": "http://your-server:3100/sse",
       "headers": {
         "Authorization": "Bearer <your-token>"
       }
@@ -171,6 +169,14 @@ Registered MCP tools:
   }
 }
 ```
+
+部分客户端不支持自定义 headers，可通过 URL Query 参数传递：
+
+```
+http://your-server:3100/sse?token=<your-token>
+```
+
+> 客户端 token 提取优先级：`Authorization: Bearer xxx` Header > `?token=xxx` Query 参数
 
 ## 故障排除
 
@@ -219,13 +225,48 @@ mem serve --sse --port 3101
 401 Unauthorized
 ```
 
-**解决**：
+**服务端日志**：
+```
+[mem][auth] 2026-01-01T00:00:00.000Z ip=1.2.3.4 path=/sse reason=missing_token
+[mem][auth] 2026-01-01T00:00:00.000Z ip=1.2.3.4 path=/sse reason=invalid_token
+```
+
+**排查步骤**：
 ```bash
-# 检查 token 设置
+# 1. 确认服务端 token 设置
 echo $MEM_MCP_AUTH_TOKEN
 
-# 使用正确的鉴权方式
-mem serve --sse --port 3100 --auth-token "<token>"
+# 2. 手动测试鉴权
+curl -H "Authorization: Bearer <your-token>" http://your-server:3100/health
+
+# 3. 检查客户端配置中的 token 是否与服务端一致
+```
+
+**常见原因**：
+1. 客户端未配置 `headers.Authorization`（missing_token）
+2. 客户端 token 与服务端不一致（invalid_token）
+3. 客户端使用了错误的鉴权方案（只识别 `Bearer`）
+
+### 非本地监听拒绝启动
+
+**症状**：
+```
+[mem][auth] 非本地监听必须配置鉴权 token（当前 host=0.0.0.0）。
+请通过 --auth-token <token> 或环境变量 MEM_MCP_AUTH_TOKEN 设置；
+若仅本地访问，请将 --host 设为 127.0.0.1。
+```
+
+**解决**：
+```bash
+# 方式 1：添加 token
+mem serve --sse --host 0.0.0.0 --auth-token "your-secret-token"
+
+# 方式 2：通过环境变量
+export MEM_MCP_AUTH_TOKEN="your-secret-token"
+mem serve --sse --host 0.0.0.0
+
+# 方式 3：仅本地访问（改为绑定 127.0.0.1）
+mem serve --sse --host 127.0.0.1
 ```
 
 ### Scope 不匹配
