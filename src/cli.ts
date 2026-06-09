@@ -506,11 +506,11 @@ program
   .command("doctor")
   .description("Run health checks")
   .option("--config <path>", "Config file path")
-  .option("--mcp", "Test MCP protocol handshake")
   .action(async (opts) => {
     console.log("🔍 Running health checks...\n");
     let passed = 0;
     let failed = 0;
+    let warned = 0;
 
     // Check 1: Config file
     const configPath = opts.config || getConfigPath();
@@ -648,16 +648,23 @@ program
           scope: "_doctor_test_",
           importance: 0,
         });
-        const readBack = await store.getById(entry.id, ["_doctor_test_"]);
-        await store.delete(entry.id, ["_doctor_test_"]);
+        let dbOk = false;
+        try {
+          const readBack = await store.getById(entry.id, ["_doctor_test_"]);
+          dbOk = !!(readBack && readBack.id === entry.id);
+          if (!dbOk) {
+            console.log(`❌ LanceDB: write succeeded but read-back verification failed`);
+            failed++;
+          }
+        } finally {
+          // Always clean up test data, even if read-back threw an error
+          await store.delete(entry.id, ["_doctor_test_"]).catch(() => {});
+        }
         const dbMs = Date.now() - dbStart;
 
-        if (readBack && readBack.id === entry.id) {
+        if (dbOk) {
           console.log(`✅ LanceDB read/write: OK (${dbMs}ms) [test data cleaned up]`);
           passed++;
-        } else {
-          console.log(`❌ LanceDB: write succeeded but read-back verification failed`);
-          failed++;
         }
       } catch (err) {
         console.log(`❌ LanceDB: ${err instanceof Error ? err.message : err}`);
@@ -679,6 +686,7 @@ program
             };
           };
           const llmModel = config.llm.model as string;
+          // LLM apiKey fallback chain: llm.apiKey → embedding.apiKey (first element if array)
           const llmApiKey = typeof config.embedding.apiKey === "string"
             ? config.embedding.apiKey
             : (Array.isArray(config.embedding.apiKey) ? config.embedding.apiKey[0] : undefined);
@@ -713,6 +721,7 @@ program
           const msg = err instanceof Error ? err.message : String(err);
           if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("AbortError")) {
             console.log(`⚠️  LLM: timed out (>15s), service may be slow but config is likely correct`);
+            warned++;
           } else {
             console.log(`❌ LLM: ${msg}`);
             failed++;
@@ -763,7 +772,7 @@ program
     }
 
     console.log(`\n${"─".repeat(40)}`);
-    console.log(`Results: ${passed} passed, ${failed} failed`);
+    console.log(`Results: ${passed} passed, ${failed} failed${warned > 0 ? `, ${warned} warning(s)` : ""}`);
     if (failed > 0) process.exit(1);
     process.exit(0);
   });
