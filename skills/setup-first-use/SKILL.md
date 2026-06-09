@@ -58,12 +58,40 @@
 - Node.js >= 18 是否已安装？（`node -v` 检查）
 - 是否需要多项目隔离？（默认 scope 为 `global`）
 
+### 5. MCP 接入方式
+
+向用户确认以下事项：
+
+**a) 启动模式**：
+- **本地（stdio）**：MCP 客户端以子进程方式启动 `mem serve`，适合单机单用户（推荐）
+- **远程（SSE）**：独立服务进程，支持多客户端连接，适合服务器部署或多设备共享
+
+**b) 如果选择远程（SSE），进一步确认**：
+- 服务绑定地址：仅本机（`127.0.0.1`）还是对外（`0.0.0.0`）？
+- 是否需要 Bearer Token 鉴权？（绑定 `0.0.0.0` 时必须开启）
+- 端口号（默认 `3100`）
+
+**c) MCP 客户端配置文件位置**：
+
+询问用户使用哪个 MCP 客户端，并确认配置文件路径：
+
+| 客户端 | 配置文件路径 |
+|--------|------------|
+| Claude Desktop (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude Desktop (Windows) | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Cursor | `.cursor/mcp.json`（项目根目录）或全局 `~/.cursor/mcp.json` |
+| Cline | VS Code settings 中的 `cline.mcpServers` |
+| CodeBuddy | `.codebuddy/mcp.json`（项目根目录） |
+| 其他 | 询问用户 |
+
+> **重要**：用户可能已有 MCP 配置文件（含其他 server）。AI 修改前**必须先备份**，用户自行修改则展示完整配置片段。
+
 ---
 
 ## 执行流程
 
 ```
-确认前提条件
+确认前提条件（含 MCP 接入方式）
      │
      ▼
 [Step 1] 安装 mem 命令
@@ -82,6 +110,13 @@
      │
      ▼
 [Step 6] 端到端功能验证
+     │
+     ▼
+[Step 7] MCP 客户端接入
+     │
+     ├─ AI 修改配置文件 ──▶ 备份原文件 → 写入配置
+     │
+     └─ 用户自行修改 ──▶ 展示配置片段 → 用户粘贴
      │
      ▼
 配置完成
@@ -259,11 +294,33 @@ mem delete <memory-id>
 
 ---
 
-## MCP 客户端集成
+### Step 7: MCP 客户端接入
 
-配置完成后，需要将 MCP Server 注册到客户端（如 Claude Desktop、Cursor、Cline 等）。
+根据前置确认的 MCP 接入方式，将 memory server 注册到用户的 MCP 客户端。
 
-### stdio 模式（本地，推荐）
+#### 7.1 获取 MCP 配置文件路径
+
+**向用户确认**：
+- 使用哪个 MCP 客户端？（Claude Desktop / Cursor / Cline / CodeBuddy / 其他）
+- 配置文件路径在哪里？（可参考前置确认 #5 的表格，或让用户自行提供）
+
+#### 7.2 修改前备份
+
+**如果是 AI 代为修改配置文件，必须先备份**：
+
+```bash
+cp /path/to/mcp-config.json /path/to/mcp-config.json.bak.$(date +%Y%m%d%H%M%S)
+```
+
+备份完成后告知用户备份文件位置。
+
+#### 7.3 生成配置片段
+
+根据用户选择的接入方式，生成对应的 JSON 配置片段：
+
+---
+
+**方式 A：stdio 模式（本地，推荐）**
 
 ```json
 {
@@ -279,23 +336,33 @@ mem delete <memory-id>
 }
 ```
 
-> **注意**：stdio 模式下，MCP 客户端以子进程方式启动 `mem serve`，环境变量通过 `env` 字段传入。配置文件中引用的 `${OPENAI_API_KEY}` 会从这些环境变量中解析。
+> `env` 字段中的 API Key 需替换为用户实际的 Key。stdio 模式下，MCP 客户端以子进程方式启动 `mem serve`，环境变量通过 `env` 字段传入。
 
-### SSE 模式（远程/多客户端）
+---
 
-SSE 模式支持 Bearer Token 鉴权，**绑定非回环地址（如 `0.0.0.0`）时必须配置鉴权**，否则服务拒绝启动。
+**方式 B：SSE 模式（远程，免鉴权，仅本机访问）**
 
-#### 服务端启动
-
-**场景 A：本地访问（免鉴权，默认绑定 127.0.0.1）**
-
+服务端启动：
 ```bash
 mem serve --sse --port 3100
-# 无需 token，仅本机可访问
 ```
 
-**场景 B：远程访问（必须鉴权）**
+客户端配置：
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "url": "http://localhost:3100/sse"
+    }
+  }
+}
+```
 
+---
+
+**方式 C：SSE 模式（远程，需鉴权）**
+
+服务端启动（选择一种）：
 ```bash
 # 方式 1：通过 --auth-token 传入
 mem serve --sse --port 3100 --host 0.0.0.0 --auth-token "your-secret-token"
@@ -310,38 +377,7 @@ MEM_MCP_AUTH_TOKEN=$(openssl rand -hex 24) mem serve --sse --port 3100 --host 0.
 
 > **Token 安全建议**：长度 >= 16 位随机字符串。服务端启动时若 token 长度 < 16 会打印 WARNING。
 
-#### 鉴权规则速查
-
-| 启动方式 | host | token | 行为 |
-|---------|------|-------|------|
-| `mem serve --sse` | `127.0.0.1` | 无 | ✅ 启动，免鉴权 |
-| `mem serve --sse --auth-token xxx` | `127.0.0.1` | 有 | ✅ 启动，启用鉴权 |
-| `mem serve --sse --host 0.0.0.0 --auth-token xxx` | `0.0.0.0` | 有 | ✅ 启动，启用鉴权 |
-| `mem serve --sse --host 0.0.0.0` | `0.0.0.0` | 无 | ❌ 拒绝启动 |
-| `mem serve --sse --host 0.0.0.0 --no-auth` | `0.0.0.0` | — | ❌ 拒绝启动 |
-
-> **Token 优先级**：`--auth-token` > `MEM_MCP_AUTH_TOKEN` 环境变量 > 无 token
-
-#### 鉴权保护范围
-
-启用鉴权后，所有 HTTP 请求均需携带 Bearer Token，仅以下请求豁免：
-- `GET /health` — 健康检查
-- `OPTIONS *` — CORS 预检请求
-
-#### 客户端配置
-
-**无鉴权（本地）**：
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "url": "http://localhost:3100/sse"
-    }
-  }
-}
-```
-
-**有鉴权（远程）**：
+客户端配置（Header 方式）：
 ```json
 {
   "mcpServers": {
@@ -355,14 +391,46 @@ MEM_MCP_AUTH_TOKEN=$(openssl rand -hex 24) mem serve --sse --port 3100 --host 0.
 }
 ```
 
-**有鉴权（URL Query 参数方式，部分客户端不支持 headers）**：
+客户端配置（URL Query 参数方式，部分客户端不支持 headers）：
 ```
 http://your-server:3100/sse?token=your-secret-token
 ```
 
 > 客户端提取 token 优先级：`Authorization: Bearer xxx` Header > `?token=xxx` Query 参数
 
-#### 生产环境建议
+---
+
+**鉴权规则速查**：
+
+| 启动方式 | host | token | 行为 |
+|---------|------|-------|------|
+| `mem serve --sse` | `127.0.0.1` | 无 | ✅ 启动，免鉴权 |
+| `mem serve --sse --auth-token xxx` | `127.0.0.1` | 有 | ✅ 启动，启用鉴权 |
+| `mem serve --sse --host 0.0.0.0 --auth-token xxx` | `0.0.0.0` | 有 | ✅ 启动，启用鉴权 |
+| `mem serve --sse --host 0.0.0.0` | `0.0.0.0` | 无 | ❌ 拒绝启动 |
+
+**鉴权保护范围**：启用鉴权后，所有 HTTP 请求均需携带 Bearer Token，仅 `GET /health` 和 `OPTIONS *` 豁免。
+
+---
+
+#### 7.4 写入配置
+
+根据用户选择，执行以下操作之一：
+
+**AI 代为修改**：
+1. 读取现有配置文件
+2. 将 memory server 配置**合并**到 `mcpServers` 字段中（保留其他 server 不变）
+3. 写入文件
+4. 告知用户已修改，重启 MCP 客户端生效
+
+**用户自行修改**：
+1. 将上面生成的配置片段展示给用户
+2. 提示用户：粘贴到配置文件的 `mcpServers` 字段中
+3. 提示用户重启 MCP 客户端
+
+> **注意**：如果配置文件中已有 `memory` server，需要提示用户是覆盖还是跳过。
+
+#### 7.5 生产环境建议（仅 SSE 模式）
 
 SSE 模式默认使用 HTTP，在生产环境建议在前面加一层反向代理（如 Nginx/Caddy）提供 HTTPS：
 
@@ -385,7 +453,7 @@ location /sse {
 
 > 使用反向代理时，`mem serve` 只需绑定 `127.0.0.1`，无需配置鉴权 token（由 Nginx 处理 TLS + 可选的访问控制）。
 
-### 验证 MCP 连接
+#### 7.6 验证 MCP 连接
 
 在客户端中尝试调用 `memory_store` 或 `memory_recall`，确认工具列表中出现了 memory_* 系列工具（通常 14+ 个）。
 
@@ -413,11 +481,12 @@ source ~/.zshrc
 
 1. **API Key 安全**：推荐使用 `${ENV_VAR}` 语法，避免明文存储在配置文件中
 2. **Rerank 可后补**：初始配置可跳过 Rerank，后续在 `retrieval` 段添加即可
-3. **配置修改后需重启**：MCP Server 不会热重载配置，修改后需重启 `mem serve`
+3. **配置修改后需重启**：MCP Server 不会热重载配置，修改后需重启 `mem serve`；MCP 客户端也需重启才能加载新的 server 配置
 4. **多项目隔离**：如需多项目隔离，在 `scopes.definitions` 中添加 scope 定义
 5. **Ollama 需先拉模型**：使用 Ollama 前需执行 `ollama pull <model-name>`
 6. **stdio 环境变量**：stdio 模式下，配置文件的 `${ENV_VAR}` 从 MCP 客户端的 `env` 字段解析，不是从 shell 环境
 7. **SSE 远程部署**：生产环境建议使用反向代理（Nginx/Caddy）提供 HTTPS，`mem serve` 仅绑定 `127.0.0.1`
+8. **MCP 配置文件备份**：AI 代为修改 MCP 配置文件前，必须先备份原文件
 
 ---
 
@@ -430,6 +499,9 @@ source ~/.zshrc
 | `mem doctor` 全部失败 | 先确认 `mem config validate` 通过，再排查网络 |
 | Embedding API 超时 | 检查网络连通性，可能需要配置代理 |
 | LanceDB 锁文件冲突 | 删除 `~/.local/share/memory-mcp/lancedb/*.lock` |
+| MCP 客户端连接后无工具 | 检查 `mem serve` 是否能正常启动，查看客户端日志 |
+| SSE 模式 `401 Unauthorized` | 检查客户端 token 是否与服务端一致，查看服务端日志 |
+| SSE 模式拒绝启动 `非本地监听必须配置鉴权` | 添加 `--auth-token` 或改绑 `127.0.0.1` |
 
 ---
 
@@ -439,4 +511,5 @@ source ~/.zshrc
 - [嵌入配置](docs/config/embedding.md) - Embedding 供应商详解
 - [重排配置](docs/config/rerank.md) - Rerank 供应商详解
 - [doctor 命令](docs/cli/doctor.md) - 健康检查详解
+- [serve 命令](docs/cli/serve.md) - MCP Server 启动与 SSE 鉴权详解
 - [高级配置](docs/config/advanced.md) - 高级配置选项
