@@ -865,8 +865,12 @@ scopeCmd
           opts.includeGlobal ? true : s !== "global",
         );
         if (scopesToDelete.length === 0) {
-          console.log("No scopes to delete (all memories are in global).");
-          console.log("   Use --include-global to delete global as well.");
+          if (opts.includeGlobal) {
+            console.log("No scopes to delete (database is empty).");
+          } else {
+            console.log("No scopes to delete (all memories are in global).");
+            console.log("   Use --include-global to delete global as well.");
+          }
           process.exit(0);
         }
       } else {

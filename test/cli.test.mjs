@@ -412,6 +412,7 @@ describe('CLI 命令测试', () => {
     });
 
     it('TC-SCOPE-DEL-012: global + --include-global 可单独删除 global', () => {
+      runCli('store "global 删除测试记忆"');
       const result = runCli('scope delete global --include-global --dry-run');
 
       assert.ok(result.success, 'global --include-global --dry-run 应成功');
@@ -420,6 +421,8 @@ describe('CLI 命令测试', () => {
     });
 
     it('TC-SCOPE-DEL-013: --all --include-global dry-run', () => {
+      const scope = `${TEST_SCOPE_PREFIX}:all-ig-test`;
+      runCli(`store "all include-global 测试" --scope ${scope}`);
       const result = runCli('scope delete --all --include-global --dry-run');
 
       assert.ok(result.success, '--all --include-global --dry-run 应成功');
