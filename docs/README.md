@@ -17,6 +17,7 @@ memory-lancedb-mcp 项目文档索引。
 - [serve 命令](cli/serve.md) - 启动 MCP 服务
 - [config 命令](cli/config.md) - 配置管理
 - [store 命令](cli/store.md) - 存储记忆
+- [bulk-store 命令](cli/bulk-store.md) - 批量存储记忆（推荐大数据量使用）
 - [search 命令](cli/search.md) - 语义搜索
 - [list 命令](cli/list.md) - 列表查看
 - [stats 命令](cli/stats.md) - 统计信息

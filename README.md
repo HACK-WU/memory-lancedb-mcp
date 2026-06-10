@@ -72,6 +72,7 @@ mem search "包管理器偏好"
 - **双传输模式** — stdio（默认，本地 MCP 客户端）和 SSE（HTTP，远程/多客户端）
 - **YAML 配置** — 支持 `${ENV_VAR}` 环境变量扩展
 - **CLI 管理工具** — `mem` 命令行，支持配置管理、记忆查看、健康诊断
+- **批量存储** — `mem bulk-store` 从 JSON 文件批量导入记忆，单次运行时初始化，大数据量下性能提升 ~77%
 - **多供应商 Embedding** — OpenAI, SiliconFlow, Ollama 等
 
 ## 文档导航
@@ -81,6 +82,7 @@ mem search "包管理器偏好"
 - [serve 命令](docs/cli/serve.md) - 启动 MCP 服务
 - [config 命令](docs/cli/config.md) - 配置管理
 - [store 命令](docs/cli/store.md) - 存储记忆
+- [bulk-store 命令](docs/cli/bulk-store.md) - 批量存储记忆（推荐大数据量使用）
 - [search 命令](docs/cli/search.md) - 语义搜索
 - [list 命令](docs/cli/list.md) - 列表查看
 - [stats 命令](docs/cli/stats.md) - 统计信息

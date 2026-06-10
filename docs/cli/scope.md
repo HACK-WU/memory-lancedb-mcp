@@ -255,8 +255,11 @@ mem scope delete project:old --yes
 # 导出记忆
 mem list --scope project:old --json > old-memories.json
 
-# 导入到新 scope
-# (需要编写脚本处理)
+# 使用 jq 转换格式（提取 text/category/importance/tags 字段）
+jq '[.memories[] | {text: .text, category: .category, importance: .importance, tags: .tags}]' old-memories.json > new-memories.json
+
+# 批量导入到新 scope
+mem bulk-store -f new-memories.json --scope project:new
 ```
 
 ## 使用场景

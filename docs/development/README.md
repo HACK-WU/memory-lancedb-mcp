@@ -86,6 +86,7 @@ memory-lancedb-mcp/
 - `mem serve` - 启动 MCP 服务
 - `mem config` - 配置管理
 - `mem store` - 存储记忆
+- `mem bulk-store` - 批量存储记忆（推荐大数据量使用）
 - `mem search` - 语义搜索
 - `mem list` - 列表查看
 - `mem stats` - 统计信息

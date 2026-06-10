@@ -64,6 +64,9 @@ mem config path
 # 存储记忆
 mem store "用户偏好使用 pnpm" -c preference -t tech
 
+# 批量存储记忆（推荐大数据量使用，详见 bulk-store.md）
+mem bulk-store -f memories.json --scope project:myapp
+
 # 搜索记忆
 mem search "包管理器偏好"
 

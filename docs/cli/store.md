@@ -316,6 +316,13 @@ ls -la ~/.local/share/memory-mcp/
 ## 相关文档
 
 - [CLI 参考](README.md) - 命令行工具概览
+- [bulk-store 命令](bulk-store.md) - 批量存储记忆（推荐大数据量使用）
 - [search 命令](search.md) - 语义搜索
 - [list 命令](list.md) - 列表查看
 - [MCP memory_store](../mcp/memory-tools.md) - MCP 存储工具
+
+## 批量存储提示
+
+> **需要一次性存储多条记忆？** 推荐使用 [`mem bulk-store`](bulk-store.md) 命令。
+> 相比多次调用 `mem store`，`bulk-store` 单次初始化运行时，每条可节省约 930ms 的进程启动开销。
+> 10 条记忆：`mem store` 约 12 秒 vs `mem bulk-store` 约 2.7 秒（快 **77%**）。

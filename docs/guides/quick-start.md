@@ -187,6 +187,9 @@ mem store "用户偏好使用 pnpm" -c preference -t tech,tools -i 0.9
 mem store "项目基于 LanceDB 存储" -c fact --scope myapp
 ```
 
+> **批量存储**：需要一次性导入多条记忆时，使用 [`mem bulk-store`](../cli/bulk-store.md) 命令，
+> 比多次调用 `mem store` 快约 77%（省去进程初始化开销）。
+
 ### 搜索记忆
 
 ```bash
