@@ -9,6 +9,7 @@ memory-lancedb-mcp 提供了 `mem` 命令行工具，用于管理配置、操作
 | `mem serve` | 启动 MCP 服务 | [serve.md](serve.md) |
 | `mem config` | 配置管理 | [config.md](config.md) |
 | `mem store` | 存储记忆 | [store.md](store.md) |
+| `mem bulk-store` | 批量存储记忆 | [bulk-store.md](bulk-store.md) |
 | `mem search` | 语义搜索 | [search.md](search.md) |
 | `mem list` | 列表查看 | [list.md](list.md) |
 | `mem stats` | 统计信息 | [stats.md](stats.md) |

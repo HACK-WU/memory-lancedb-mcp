@@ -145,9 +145,6 @@ mem scope delete --all --yes
 # 清除所有 scope（包括 global）
 mem scope delete --all --include-global --yes
 
-# 单独删除 global scope
-mem scope delete global --include-global --yes
-
 # 预览删除范围
 mem scope delete project:old --dry-run
 

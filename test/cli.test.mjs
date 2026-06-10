@@ -8,6 +8,8 @@ import assert from 'node:assert';
 import { runCli, runCliJson, cleanupTestData, generateRandomTestData, sleep } from './helpers/cli.mjs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 // 测试 scope 前缀，避免污染用户数据
 const TEST_SCOPE_PREFIX = 'test:cli';
@@ -528,6 +530,135 @@ describe('CLI 命令测试', () => {
         result.output?.includes('error'),
         'JSON 输出应成功'
       );
+    });
+  });
+
+  describe('bulk-store 命令测试', () => {
+    let tempDir;
+
+    before(() => {
+      tempDir = join(tmpdir(), `mem-bulk-test-${Date.now()}`);
+      mkdirSync(tempDir, { recursive: true });
+    });
+
+    after(() => {
+      if (tempDir && existsSync(tempDir)) {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    function writeJsonFile(filename, data) {
+      const filePath = join(tempDir, filename);
+      writeFileSync(filePath, JSON.stringify(data), 'utf-8');
+      return filePath;
+    }
+
+    it('TC-BULK-001: 缺少 --file 参数应失败', () => {
+      const result = runCli('bulk-store');
+      assert.strictEqual(result.success, false, '缺少 --file 应失败');
+      assert.ok(result.output.includes('--file') || result.output.includes('required'), '应提示 --file 必需');
+    });
+
+    it('TC-BULK-002: 文件不存在应失败', () => {
+      const result = runCli('bulk-store -f /nonexistent/file.json');
+      assert.strictEqual(result.success, false);
+      assert.ok(result.output.includes('not found') || result.output.includes('❌'));
+    });
+
+    it('TC-BULK-003: 非数组 JSON 应失败', () => {
+      const filePath = writeJsonFile('not-array.json', { text: 'not an array' });
+      const result = runCli(`bulk-store -f ${filePath}`);
+      assert.strictEqual(result.success, false);
+      assert.ok(result.output.includes('array') || result.output.includes('❌'));
+    });
+
+    it('TC-BULK-004: 空数组应失败', () => {
+      const filePath = writeJsonFile('empty-array.json', []);
+      const result = runCli(`bulk-store -f ${filePath}`);
+      assert.strictEqual(result.success, false);
+      assert.ok(result.output.includes('No entries') || result.output.includes('❌'));
+    });
+
+    it('TC-BULK-005: 无效 JSON 语法应失败', () => {
+      const filePath = join(tempDir, 'invalid.json');
+      writeFileSync(filePath, '{not valid json', 'utf-8');
+      const result = runCli(`bulk-store -f ${filePath}`);
+      assert.strictEqual(result.success, false);
+      assert.ok(result.output.includes('parse') || result.output.includes('❌'));
+    });
+
+    it('TC-BULK-006: --dry-run 验证正常条目', () => {
+      const filePath = writeJsonFile('valid-entries.json', [
+        { text: 'Valid entry one', category: 'fact', importance: 0.8 },
+        { text: 'Valid entry two', tags: 'tech', importance: 0.5 },
+      ]);
+      const result = runCli(`bulk-store -f ${filePath} --dry-run`);
+      assert.strictEqual(result.success, true);
+      assert.ok(result.output.includes('2 entries total'));
+      assert.ok(result.output.includes('2 valid'));
+      assert.ok(result.output.includes('0 skipped'));
+    });
+
+    it('TC-BULK-007: --dry-run 检测无效条目', () => {
+      const filePath = writeJsonFile('mixed-entries.json', [
+        { text: 'Valid entry', importance: 0.5 },
+        { text: '', importance: 2.0 },
+        { text: '   ', importance: -1 },
+        { text: 'Another valid' },
+      ]);
+      const result = runCli(`bulk-store -f ${filePath} --dry-run`);
+      assert.strictEqual(result.success, true);
+      assert.ok(result.output.includes('4 entries total'));
+      assert.ok(result.output.includes('2 valid'));
+      assert.ok(result.output.includes('2 skipped'));
+    });
+
+    it('TC-BULK-008: 同一 entry 多错误仍计为 1 skipped', () => {
+      const filePath = writeJsonFile('multi-error.json', [
+        { text: '', importance: 2.0 },
+      ]);
+      const result = runCli(`bulk-store -f ${filePath} --dry-run`);
+      assert.strictEqual(result.success, true);
+      assert.ok(result.output.includes('1 entries total'));
+      assert.ok(result.output.includes('0 valid'));
+      assert.ok(result.output.includes('1 skipped'));
+      // 两个 reason 仍应输出
+      assert.ok(result.output.includes('missing or empty text'));
+      assert.ok(result.output.includes('invalid importance'));
+    });
+
+    it('TC-BULK-009: 无效默认 importance 应失败', () => {
+      const filePath = writeJsonFile('ok.json', [{ text: 'Test' }]);
+      const result = runCli(`bulk-store -f ${filePath} --importance 1.5 --dry-run`);
+      assert.strictEqual(result.success, false);
+      assert.ok(result.output.includes('Invalid default importance') || result.output.includes('importance'));
+    });
+
+    it('TC-BULK-010: --scope 设置默认 scope', () => {
+      const filePath = writeJsonFile('no-scope.json', [
+        { text: 'No scope specified', category: 'fact' },
+      ]);
+      const result = runCli(`bulk-store -f ${filePath} --scope ${TEST_SCOPE_PREFIX}:bulk --dry-run`);
+      assert.strictEqual(result.success, true);
+      assert.ok(result.output.includes('1 valid'));
+    });
+
+    it('TC-BULK-011: --category 设置默认 category', () => {
+      const filePath = writeJsonFile('no-cat.json', [
+        { text: 'No category specified' },
+      ]);
+      const result = runCli(`bulk-store -f ${filePath} --category fact --dry-run`);
+      assert.strictEqual(result.success, true);
+      assert.ok(result.output.includes('1 valid'));
+    });
+
+    it('TC-BULK-012: --help 应成功', () => {
+      const result = runCli('bulk-store --help');
+      assert.strictEqual(result.success, true);
+      assert.ok(result.output.includes('--file'));
+      assert.ok(result.output.includes('--dry-run'));
+      assert.ok(result.output.includes('--stop-on-error'));
+      assert.ok(result.output.includes('--json'));
     });
   });
 });

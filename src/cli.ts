@@ -3,6 +3,8 @@
  *
  * Commands:
  *   mem serve          Start MCP Server (stdio mode)
+ *   mem store          Store a memory
+ *   mem bulk-store     Store multiple memories from a JSON file
  *   mem list           List memories
  *   mem search <q>     Search memories
  *   mem stats          Show statistics
@@ -379,6 +381,185 @@ program
       // that keep the Node.js event loop alive. Without an explicit exit, the
       // process hangs after completing the CLI operation.
       process.exit(0);
+    } catch (err) {
+      console.error(`❌ ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
+// ============================================================================
+// mem bulk-store — Store multiple memories from a JSON file
+// ============================================================================
+
+interface BulkStoreEntry {
+  text: string;
+  category?: string;
+  importance?: number;
+  tags?: string;
+  scope?: string;
+}
+
+interface BulkStoreResult {
+  ok: Array<{ index: number; text: string; id: string }>;
+  errors: Array<{ index: number; text: string; error: string }>;
+  skipped: Array<{ index: number; text: string; reason: string }>;
+}
+
+program
+  .command("bulk-store")
+  .description("Store multiple memories from a JSON array file (serial execution)")
+  .requiredOption("-f, --file <path>", "JSON file with memory entries (array of {text, category?, importance?, tags?, scope?})")
+  .option("-s, --scope <scope>", "Default scope for entries without one")
+  .option("-c, --category <cat>", "Default category for entries without one")
+  .option("-i, --importance <n>", "Default importance 0-1", "0.7")
+  .option("--stop-on-error", "Stop on first error (default: continue)")
+  .option("--dry-run", "Validate entries without storing")
+  .option("--json", "JSON output")
+  .option("--config <path>", "Config file path")
+  .action(async (opts) => {
+    try {
+      // 1. Read and validate JSON file
+      const filePath = resolve(opts.file);
+      if (!existsSync(filePath)) {
+        console.error(`❌ File not found: ${filePath}`);
+        process.exit(1);
+      }
+
+      let entries: BulkStoreEntry[];
+      try {
+        const raw = readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) {
+          console.error("❌ JSON file must contain an array of entries.");
+          process.exit(1);
+        }
+        entries = parsed;
+      } catch (err) {
+        console.error(`❌ Failed to parse JSON file: ${err instanceof Error ? err.message : err}`);
+        process.exit(1);
+      }
+
+      if (entries.length === 0) {
+        console.error("❌ No entries in JSON file.");
+        process.exit(1);
+      }
+
+      // 2. Validate entries
+      const defaultImportance = parseFloat(opts.importance);
+      if (isNaN(defaultImportance) || defaultImportance < 0 || defaultImportance > 1) {
+        console.error("❌ Invalid default importance value. Must be 0-1.");
+        process.exit(1);
+      }
+
+      const result: BulkStoreResult = { ok: [], errors: [], skipped: [] };
+      const startTime = Date.now();
+
+      // Pre-validate all entries. Use a Set to avoid double-counting when
+      // the same entry has multiple validation failures.
+      const skippedIndices = new Set<number>();
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        const reasons: string[] = [];
+        if (!entry.text || typeof entry.text !== "string" || !entry.text.trim()) {
+          reasons.push("missing or empty text");
+        }
+        if (entry.importance !== undefined && (typeof entry.importance !== "number" || isNaN(entry.importance) || entry.importance < 0 || entry.importance > 1)) {
+          reasons.push(`invalid importance: ${entry.importance}`);
+        }
+        for (const reason of reasons) {
+          result.skipped.push({ index: i, text: String(entry.text ?? ""), reason });
+        }
+        if (reasons.length > 0) {
+          skippedIndices.add(i);
+        }
+      }
+
+      const validEntries = entries.filter((_, i) => !skippedIndices.has(i));
+
+      if (opts.dryRun) {
+        console.log(`Dry run: ${entries.length} entries total, ${validEntries.length} valid, ${skippedIndices.size} skipped`);
+        if (result.skipped.length > 0) {
+          console.log("\nSkipped entries:");
+          for (const s of result.skipped) {
+            console.log(`  #${s.index}: ${s.reason}`);
+          }
+        }
+        process.exit(0);
+      }
+
+      // 3. Initialize runtime once
+      const runtime = await createMemoryRuntime({ configPath: opts.config, quiet: true });
+
+      // 4. Serial store loop
+      let processed = 0;
+      for (let i = 0; i < entries.length; i++) {
+        // Skip invalid entries (O(1) Set lookup)
+        if (skippedIndices.has(i)) continue;
+
+        const entry = entries[i];
+        const params: Record<string, unknown> = {
+          text: entry.text,
+          importance: entry.importance ?? defaultImportance,
+        };
+        if (entry.category || opts.category) params.category = entry.category || opts.category;
+        if (entry.tags) params.tags = entry.tags;
+        if (entry.scope || opts.scope) params.scope = entry.scope || opts.scope;
+
+        processed++;
+        const prefix = `[${processed}/${validEntries.length}]`;
+
+        try {
+          const res = await runtime.callTool("memory_store", params, { agentId: "system" });
+          const storedId = (res as { details?: { id?: string } }).details?.id;
+          result.ok.push({
+            index: i,
+            text: entry.text.length > 50 ? entry.text.slice(0, 50) + "..." : entry.text,
+            id: storedId || "unknown",
+          });
+          if (!opts.json) {
+            const idStr = storedId || "(no id)";
+            console.log(`${prefix} ✅ ${entry.text.slice(0, 60)} → ${idStr}`);
+          }
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          result.errors.push({
+            index: i,
+            text: entry.text.length > 50 ? entry.text.slice(0, 50) + "..." : entry.text,
+            error: errMsg,
+          });
+          if (!opts.json) {
+            console.error(`${prefix} ❌ ${entry.text.slice(0, 60)} → ${errMsg}`);
+          }
+          if (opts.stopOnError) {
+            console.error(`\nStopped at entry #${i} due to error (--stop-on-error).`);
+            break;
+          }
+        }
+      }
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+      // 5. Output summary
+      if (opts.json) {
+        console.log(JSON.stringify({
+          total: entries.length,
+          processed: processed,
+          ok: result.ok.length,
+          errors: result.errors.length,
+          skipped: skippedIndices.size,
+          elapsedSeconds: parseFloat(elapsed),
+          details: result,
+        }, null, 2));
+      } else {
+        console.log(`\n${"─".repeat(50)}`);
+        console.log(`Bulk store complete (${elapsed}s)`);
+        console.log(`  ✅ Stored:  ${result.ok.length}`);
+        if (result.errors.length > 0) console.log(`  ❌ Errors:  ${result.errors.length}`);
+        if (skippedIndices.size > 0) console.log(`  ⏭️  Skipped: ${skippedIndices.size}`);
+        console.log(`  Processed: ${processed} / ${entries.length}`);
+      }
+
+      process.exit(result.errors.length > 0 ? 1 : 0);
     } catch (err) {
       console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
