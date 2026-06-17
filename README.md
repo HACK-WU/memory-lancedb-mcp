@@ -54,6 +54,9 @@ mem serve --sse --port 3100
 # 检查配置有效性
 mem config validate
 
+# 查看配置中定义的 scope
+mem config scopes
+
 # 健康检查
 mem doctor
 

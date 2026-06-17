@@ -54,6 +54,21 @@ describe('CLI 命令测试', () => {
       assert.strictEqual(result.success, true, '命令应执行成功');
       assert.ok(result.output.includes('✅') || result.output.includes('valid'), '配置应有效');
     });
+
+    it('TC-CFG-006: 显示配置的 scopes', () => {
+      const result = runCli('config scopes');
+      
+      assert.strictEqual(result.success, true, '命令应执行成功');
+      assert.ok(result.output.includes('Default scope'), '应显示默认 scope');
+    });
+
+    it('TC-CFG-007: 以 JSON 格式显示 scopes', () => {
+      const result = runCli('config scopes --json');
+      
+      assert.strictEqual(result.success, true, '命令应执行成功');
+      const parsed = JSON.parse(result.output);
+      assert.ok(typeof parsed.configured === 'boolean', '应包含 configured 字段');
+    });
   });
   
   describe('记忆存储命令', () => {

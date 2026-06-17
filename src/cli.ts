@@ -13,6 +13,7 @@
  *   mem config init    Create default config
  *   mem config show    Show current config
  *   mem config path    Show config file path
+ *   mem config scopes  Show scopes defined in config
  *   mem doctor         Health check
  */
 
@@ -675,6 +676,84 @@ configCmd
       }
     } catch (err) {
       console.error(`❌ Config invalid: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("scopes")
+  .description("Show scopes defined in the config file (default, definitions, agent access)")
+  .option("--json", "JSON output")
+  .action((opts) => {
+    try {
+      const path = getConfigPath();
+      if (!existsSync(path)) {
+        console.error(`No config found. Run 'mem config init' first.`);
+        process.exit(1);
+      }
+      const config = loadConfig(path);
+      const scopes = config.scopes;
+      if (!scopes) {
+        if (opts.json) {
+          console.log(JSON.stringify({ configured: false, message: "No scopes section in config" }, null, 2));
+        } else {
+          console.log("No scopes section found in config.");
+          console.log("Add a 'scopes:' section to config.yaml to define scopes.");
+        }
+        process.exit(0);
+      }
+
+      const defaultScope = scopes.default || "(unset)";
+      const definitions = scopes.definitions || {};
+      const agentAccess = scopes.agentAccess || {};
+
+      if (opts.json) {
+        console.log(JSON.stringify({
+          configured: true,
+          default: scopes.default || null,
+          definitions,
+          agentAccess,
+        }, null, 2));
+        process.exit(0);
+      }
+
+      console.log("Configured Scopes:");
+      console.log("");
+      console.log(`  Default scope: ${defaultScope}`);
+      console.log("");
+
+      const defEntries = Object.entries(definitions);
+      if (defEntries.length > 0) {
+        console.log("  Scope Definitions:");
+        console.log("  ────────────────────────────────────────────────────");
+        for (const [name, def] of defEntries) {
+          const desc = (def as { description?: string }).description || "(no description)";
+          const isDefault = name === scopes.default ? " (default)" : "";
+          console.log(`  ${name}${isDefault}`);
+          console.log(`    ${desc}`);
+        }
+        console.log("");
+      } else {
+        console.log("  No scope definitions configured.");
+        console.log("");
+      }
+
+      const accessEntries = Object.entries(agentAccess);
+      if (accessEntries.length > 0) {
+        console.log("  Agent Access:");
+        console.log("  ────────────────────────────────────────────────────");
+        for (const [agent, scopeList] of accessEntries) {
+          const scopes2 = Array.isArray(scopeList) ? scopeList.join(", ") : String(scopeList);
+          console.log(`  ${agent.padEnd(20)} → ${scopes2}`);
+        }
+        console.log("");
+      }
+
+      const totalDefs = defEntries.length;
+      const totalAgents = accessEntries.length;
+      console.log(`Total: ${totalDefs} scope definition(s), ${totalAgents} agent access rule(s)`);
+    } catch (err) {
+      console.error(`❌ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   });
