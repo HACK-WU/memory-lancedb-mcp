@@ -20,7 +20,7 @@
 import { Command } from "commander";
 import { startMcpServer } from "./mcp-server.js";
 import { startSseServer } from "./mcp-server-sse.js";
-import { createMemoryRuntime, normalizeTags, type MemoryRuntime } from "./index.js";
+import { createMemoryRuntime, type MemoryRuntime } from "./index.js";
 import { initConfig, getConfigPath, loadConfig, getDefaultConfigDir } from "./config.js";
 import YAML from "yaml";
 import { existsSync, readFileSync } from "node:fs";
@@ -73,13 +73,6 @@ async function loadMemoryStore(): Promise<MemoryStoreType> {
     // @ts-ignore - fallback to local dist for development
     return (await import("../../dist/src/store.js")).MemoryStore as MemoryStoreType;
   }
-}
-
-/** Build tag prefix string (delegates normalization+validation to wrapper). */
-function tagPrefix(tags: string | undefined): string {
-  const normalized = normalizeTags(tags);
-  if (!normalized) return "";
-  return `【标签:${normalized}】`;
 }
 
 // ============================================================================
@@ -228,13 +221,14 @@ program
         process.exit(1);
       }
 
-      // If --tags is set, use recall with tag prefix for filtering
+      // If --tags is set, use memory_list with tags.  The wrapper's tag
+      // preprocessing boosts the limit and postprocessing filters entries
+      // by the embedded 【标签:...】 prefix — no vector search needed.
       if (opts.tags) {
-        const prefix = tagPrefix(opts.tags);
-        const params: Record<string, unknown> = { query: prefix, limit, tags: opts.tags };
+        const params: Record<string, unknown> = { limit, offset, tags: opts.tags };
         if (opts.scope) params.scope = opts.scope;
         if (opts.category) params.category = opts.category;
-        const result = await runtime.callTool("memory_recall", params, { agentId: "system" });
+        const result = await runtime.callTool("memory_list", params, { agentId: "system" });
         if (opts.json) {
           console.log(JSON.stringify(result, null, 2));
         } else {
@@ -284,12 +278,47 @@ program
         console.error("❌ Invalid limit value.");
         process.exit(1);
       }
+      // When --tags is set, use memory_list (paginated scan) + post-filter by
+      // query substring.  This avoids memory_recall's cold-start / reranker
+      // reliability issues for tag-filtered searches.
+      if (opts.tags) {
+        // Scan with a generous limit to find enough tagged entries
+        const listParams: Record<string, unknown> = {
+          limit: searchLimit * 3,
+          offset: 0,
+          tags: opts.tags,
+        };
+        if (opts.scope) listParams.scope = opts.scope;
+        if (opts.category) listParams.category = opts.category;
+        const listResult = await runtime.callTool("memory_list", listParams, { agentId: "system" });
+        // Post-filter by query substring (case-insensitive)
+        const queryLower = query.toLowerCase();
+        const mems = (listResult.details?.memories as Array<Record<string, unknown>>) || [];
+        const filtered = mems.filter((m) => {
+          const text = ((m.text as string) || "").toLowerCase();
+          return text.includes(queryLower);
+        }).slice(0, searchLimit);
+        const count = filtered.length;
+        const header = count === 1 ? "Found 1 memory:" : `Found ${count} memories:`;
+        const lines = filtered.map((m, i) => {
+          const text = ((m.text as string) || "").replace(/^【标签:[^】]+】\s*/, "");
+          return `${i + 1}. [${m.id}] [${m.rawCategory || m.category || "other"}${m.scope ? ":" + m.scope : ""}] ${text}`;
+        });
+        const resultText = [header, "", ...lines].join("\n").trim();
+        if (opts.json) {
+          console.log(JSON.stringify({ content: [{ type: "text", text: resultText }], details: { count, memories: filtered } }, null, 2));
+        } else {
+          console.log(resultText);
+        }
+        process.exit(0);
+      }
+
+      // Normal search without tags — use memory_recall directly
       const params: Record<string, unknown> = {
         query,
         limit: searchLimit,
       };
       if (opts.scope) params.scope = opts.scope;
-      if (opts.tags) params.tags = opts.tags;
 
       const result = await runtime.callTool("memory_recall", params, { agentId: "system" });
       if (opts.json) {

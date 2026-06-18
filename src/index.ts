@@ -51,13 +51,6 @@ export function normalizeTags(tags: string | undefined): string {
   return normalized;
 }
 
-/** Assemble tag string into a text prefix. Returns empty string if no tags. */
-function assembleTags(tags: string | undefined): string {
-  const normalized = normalizeTags(tags);
-  if (!normalized) return "";
-  return `【标签:${normalized}】 `;
-}
-
 /** Strip tag prefix from text, returning the clean content. */
 function stripTags(text: string): string {
   return text.replace(TAG_PREFIX_RE, "");
@@ -311,25 +304,35 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
       }
 
       // --- Tag preprocessing ---
-      // effectiveName may differ from name when memory_list+tags is rewritten to memory_recall.
+      // For memory_store: embed the 【标签:...】 prefix into text (unchanged).
+      // For memory_list + tags: paginate through all pages, filter by tag prefix,
+      //   and return matching entries.  This avoids relying on vector search which
+      //   has cold-start / reranker reliability issues for short tag queries.
+      // For memory_recall + tags: prepend plain tag text to the query so that
+      //   BM25 can match the embedded tag prefix.
       let effectiveName = name;
       const normalized: Record<string, unknown> = { ...params };
+      // Track whether we need tag post-filtering (set when tags param is present).
+      let tagFilterRequested = "";
+      // For memory_list + tags, handle via paginated scan (bypass normal flow).
+      let listTagScan = false;
       if (TAG_AWARE_TOOLS.has(effectiveName) && typeof normalized.tags === "string") {
         const tags = normalized.tags as string;
-        const prefix = assembleTags(tags);
+        const normalizedTagStr = normalizeTags(tags);
         delete normalized.tags;
-        if (prefix) {
+        if (normalizedTagStr) {
+          tagFilterRequested = normalizedTagStr;
           if (effectiveName === "memory_store") {
-            normalized.text = prefix + (normalized.text || "");
+            // Store: embed full bracket prefix into text for BM25 indexing.
+            normalized.text = `【标签:${normalizedTagStr}】 ` + (normalized.text || "");
+            tagFilterRequested = ""; // no filtering needed for store
           } else if (effectiveName === "memory_recall") {
-            normalized.query = prefix + (normalized.query || "");
+            // Recall: prepend plain tag text so BM25 can match.
+            const existingQuery = (normalized.query as string) || "";
+            normalized.query = normalizedTagStr + (existingQuery ? " " + existingQuery : "");
           } else if (effectiveName === "memory_list") {
-            // Rewrite list+tags to recall(query=prefix) so that tag filtering
-            // actually takes effect (BM25 hits the embedded prefix).
-            // Preserve scope/category/limit; drop offset (recall doesn't support it).
-            effectiveName = "memory_recall";
-            normalized.query = prefix;
-            delete normalized.offset;
+            // Use paginated scan to find all tagged entries.
+            listTagScan = true;
           }
         }
       }
@@ -384,6 +387,81 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
         }
       }
 
+      // --- Paginated tag scan for memory_list + tags ---
+      // When memory_list is called with tags, we paginate through all entries
+      // to find those matching the requested tag prefix.  This is necessary
+      // because the plugin caps memory_list at 50 results per page, and tagged
+      // entries may be beyond the first page.  Vector search (memory_recall) is
+      // unreliable for short tag queries due to embedding cold-start / reranker
+      // timeout issues.
+      if (listTagScan) {
+        const requestedTokens = tagFilterRequested.split(",").map((t) => t.trim()).filter(Boolean);
+        const userLimit = typeof params.limit === "number" ? params.limit as number
+          : parseInt(String(params.limit), 10) || 10;
+        const userOffset = typeof params.offset === "number" ? params.offset as number
+          : parseInt(String(params.offset), 10) || 0;
+        const PAGE_SIZE = 50;
+        const MAX_PAGES = 20; // safety cap: scan up to 1000 entries
+        const matchedEntries: Array<{ id: string; text: string; category?: string; scope?: string; importance?: number }> = [];
+        let offset = 0;
+        let pagesScanned = 0;
+
+        while (pagesScanned < MAX_PAGES) {
+          const pageParams: Record<string, unknown> = { limit: PAGE_SIZE, offset };
+          if (normalized.scope) pageParams.scope = normalized.scope;
+          if (normalized.category) pageParams.category = normalized.category;
+          const pageResult = await api.callTool("memory_list", pageParams, effectiveCtx);
+          const pageMems = (pageResult.details?.memories as Array<Record<string, unknown>>) || [];
+          if (pageMems.length === 0) break;
+
+          for (const mem of pageMems) {
+            const text = (mem.text as string) || "";
+            const TAG_RE = /【标签:([^】]+)】/;
+            const m = text.match(TAG_RE);
+            if (m) {
+              const entryTokens = m[1].split(",").map((t: string) => t.trim());
+              if (requestedTokens.every((rt) => entryTokens.includes(rt))) {
+                matchedEntries.push({
+                  id: (mem.id as string) || "",
+                  text,
+                  category: mem.rawCategory as string || mem.category as string,
+                  scope: mem.scope as string,
+                  importance: mem.importance as number,
+                });
+              }
+            }
+          }
+
+          pagesScanned++;
+          offset += PAGE_SIZE;
+          // Stop if we have enough results AND have scanned past the user's offset
+          if (matchedEntries.length >= userLimit + userOffset && pagesScanned >= 2) break;
+          if (pageMems.length < PAGE_SIZE) break; // last page
+        }
+
+        // Apply user offset and limit
+        const sliced = matchedEntries.slice(userOffset, userOffset + userLimit);
+        // Strip tag prefixes from text for consistency with other code paths
+        // (the normal postprocessing flow also calls stripTags on results).
+        for (const e of sliced) {
+          e.text = stripTags(e.text);
+        }
+        const count = sliced.length;
+        const header = count === 1 ? "Found 1 memory:" : `Found ${count} memories:`;
+        const entryLines = sliced.map((e, i) => {
+          return `${i + 1}. [${e.id}] [${e.category || "other"}${e.scope ? ":" + e.scope : ""}] ${e.text}`;
+        });
+        const resultText = [header, "", ...entryLines].join("\n").trim();
+
+        return {
+          content: [{ type: "text", text: resultText }],
+          details: {
+            count,
+            memories: sliced,
+          },
+        } as ToolResult;
+      }
+
       const result = await api.callTool(effectiveName, normalized, effectiveCtx);
 
       // --- Tag postprocessing ---
@@ -401,10 +479,13 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
           // Extract individual tag tokens from the requested tags string.
           // "scope测试,global" → ["scope测试", "global"]
           const requestedTokens = requestedTags.split(",").map((t) => t.trim()).filter(Boolean);
+          // Match both memory_recall ("Found N memories:") and memory_list
+          // ("Recent memories (showing N):") header formats.
+          const HEADER_RE = /^\s*(?:Found\s+\d+\s+memories?:|Recent\s+memories\s*\(showing\s+\d+\)\s*:)/i;
           for (const item of result.content) {
             if (typeof item.text !== "string") continue;
             const lines = item.text.split("\n");
-            const headerIdx = lines.findIndex((l) => /^\s*Found\s+\d+\s+memories?:/i.test(l));
+            const headerIdx = lines.findIndex((l) => HEADER_RE.test(l));
             const kept: string[] = [];
             let currentEntry: string[] = [];
             let inEntry = false;
@@ -421,9 +502,9 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
               } else if (inEntry) {
                 currentEntry.push(line);
               } else {
-                // Header or blank lines before entries
-                if (headerIdx >= 0 && i <= headerIdx) continue; // skip old header
-                kept.push(line);
+                // Header or blank lines before entries — skip them all
+                // (we will rebuild the header below).
+                continue;
               }
             }
             // Flush last entry
@@ -433,7 +514,7 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
             // Rebuild header
             const entryCount = kept.filter((l) => /^\s*\d+\.\s+\[/.test(l)).length;
             const prefix = entryCount === 1 ? "Found 1 memory:" : `Found ${entryCount} memories:`;
-            item.text = [prefix, "", ...kept.filter((l) => !/^\s*Found\s+\d+\s+memories?:/i.test(l))]
+            item.text = [prefix, "", ...kept.filter((l) => !HEADER_RE.test(l))]
               .join("\n")
               .replace(/\n{3,}/g, "\n\n")
               .trim();
