@@ -316,6 +316,8 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
       let tagFilterRequested = "";
       // For memory_list + tags, handle via paginated scan (bypass normal flow).
       let listTagScan = false;
+      // Original limit before tag-boost (used to truncate post-filter results).
+      let tagRecallOrigLimit = 0;
       if (TAG_AWARE_TOOLS.has(effectiveName) && typeof normalized.tags === "string") {
         const tags = normalized.tags as string;
         const normalizedTagStr = normalizeTags(tags);
@@ -330,6 +332,14 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
             // Recall: prepend plain tag text so BM25 can match.
             const existingQuery = (normalized.query as string) || "";
             normalized.query = normalizedTagStr + (existingQuery ? " " + existingQuery : "");
+            // Boost recall limit so the tag post-filter has enough candidates.
+            // Tagged entries may be ranked lower by semantic search, so we
+            // need a larger pool to find them after hard-filtering.
+            const TAG_RECALL_BOOST = 10;
+            const origLimit = typeof normalized.limit === "number" ? normalized.limit as number
+              : parseInt(String(normalized.limit), 10) || 5;
+            tagRecallOrigLimit = origLimit;
+            normalized.limit = origLimit * TAG_RECALL_BOOST;
           } else if (effectiveName === "memory_list") {
             // Use paginated scan to find all tagged entries.
             listTagScan = true;
@@ -396,16 +406,15 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
       // timeout issues.
       if (listTagScan) {
         const requestedTokens = tagFilterRequested.split(",").map((t) => t.trim()).filter(Boolean);
-        const userLimit = typeof params.limit === "number" ? params.limit as number
-          : parseInt(String(params.limit), 10) || 10;
-        const userOffset = typeof params.offset === "number" ? params.offset as number
-          : parseInt(String(params.offset), 10) || 0;
         const PAGE_SIZE = 50;
         const MAX_PAGES = 20; // safety cap: scan up to 1000 entries
         const matchedEntries: Array<{ id: string; text: string; category?: string; scope?: string; importance?: number }> = [];
         let offset = 0;
         let pagesScanned = 0;
 
+        // Scan ALL pages to find tagged entries — do NOT truncate here.
+        // Callers (CLI list, CLI search) apply their own offset/limit or
+        // substring filtering on the full matched set.
         while (pagesScanned < MAX_PAGES) {
           const pageParams: Record<string, unknown> = { limit: PAGE_SIZE, offset };
           if (normalized.scope) pageParams.scope = normalized.scope;
@@ -434,21 +443,32 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
 
           pagesScanned++;
           offset += PAGE_SIZE;
-          // Stop if we have enough results AND have scanned past the user's offset
-          if (matchedEntries.length >= userLimit + userOffset && pagesScanned >= 2) break;
           if (pageMems.length < PAGE_SIZE) break; // last page
         }
 
-        // Apply user offset and limit
-        const sliced = matchedEntries.slice(userOffset, userOffset + userLimit);
-        // Strip tag prefixes from text for consistency with other code paths
-        // (the normal postprocessing flow also calls stripTags on results).
-        for (const e of sliced) {
-          e.text = stripTags(e.text);
+        // Warn when scan hit the safety cap — more tagged entries may exist beyond.
+        if (pagesScanned >= MAX_PAGES) {
+          console.warn(
+            `[mem:warn] listTagScan: scanned ${MAX_PAGES * PAGE_SIZE} entries (MAX_PAGES=${MAX_PAGES}), ` +
+            `results may be incomplete. Consider increasing MAX_PAGES for larger databases.`
+          );
         }
-        const count = sliced.length;
+
+        // Keep tag prefixes in text — format as "【标签:X】 content" so that
+        // the tag is visible in CLI output.  The downstream stripTags regex
+        // (non-anchored /g) strips tags from normal memory_list/recall results,
+        // but this path returns early before that postprocessing step.
+        const TAG_RE = /【标签:([^】]+)】/;
+        for (const e of matchedEntries) {
+          const m = e.text.match(TAG_RE);
+          if (m) {
+            const content = e.text.replace(TAG_RE, "").trim();
+            e.text = `【标签:${m[1]}】 ${content}`;
+          }
+        }
+        const count = matchedEntries.length;
         const header = count === 1 ? "Found 1 memory:" : `Found ${count} memories:`;
-        const entryLines = sliced.map((e, i) => {
+        const entryLines = matchedEntries.map((e, i) => {
           return `${i + 1}. [${e.id}] [${e.category || "other"}${e.scope ? ":" + e.scope : ""}] ${e.text}`;
         });
         const resultText = [header, "", ...entryLines].join("\n").trim();
@@ -457,7 +477,7 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
           content: [{ type: "text", text: resultText }],
           details: {
             count,
-            memories: sliced,
+            memories: matchedEntries,
           },
         } as ToolResult;
       }
@@ -511,6 +531,20 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
             if (inEntry && entryMatchesTags(currentEntry, requestedTokens)) {
               kept.push(...currentEntry);
             }
+            // Truncate to original limit (before tag-boost) when recall was boosted.
+            if (tagRecallOrigLimit > 0) {
+              const truncated: string[] = [];
+              let entries = 0;
+              for (const line of kept) {
+                if (/^\s*\d+\.\s+\[/.test(line)) {
+                  if (entries >= tagRecallOrigLimit) break;
+                  entries++;
+                }
+                truncated.push(line);
+              }
+              kept.length = 0;
+              kept.push(...truncated);
+            }
             // Rebuild header
             const entryCount = kept.filter((l) => /^\s*\d+\.\s+\[/.test(l)).length;
             const prefix = entryCount === 1 ? "Found 1 memory:" : `Found ${entryCount} memories:`;
@@ -523,9 +557,13 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
 
         // Strip tag prefixes from result text.
         // Use original `name` so that even rewritten memory_list calls have prefixes stripped.
+        // No ^ anchor — the plugin formats entries as numbered lines like
+        // "1. [uuid] [cat] 【标签:x】 text" where the tag is mid-line, not at position 0.
+        // The tag prefix format is controlled by our storage code, so this is safe.
+        const STRIP_TAGS_RE = /【标签:[^】]+】\s*/g;
         for (const item of result.content) {
           if (typeof item.text === "string") {
-            item.text = stripTags(item.text);
+            item.text = item.text.replace(STRIP_TAGS_RE, "");
           }
         }
       }

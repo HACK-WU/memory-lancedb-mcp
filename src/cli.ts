@@ -222,19 +222,27 @@ program
       }
 
       // If --tags is set, use memory_list with tags.  The wrapper's tag
-      // preprocessing boosts the limit and postprocessing filters entries
-      // by the embedded 【标签:...】 prefix — no vector search needed.
+      // preprocessing scans ALL entries and filters by the embedded
+      // 【标签:...】 prefix — no vector search needed.
+      // listTagScan returns ALL matched entries; the CLI applies
+      // user-requested offset/limit here for display pagination.
       if (opts.tags) {
-        const params: Record<string, unknown> = { limit, offset, tags: opts.tags };
+        const params: Record<string, unknown> = { tags: opts.tags };
         if (opts.scope) params.scope = opts.scope;
         if (opts.category) params.category = opts.category;
         const result = await runtime.callTool("memory_list", params, { agentId: "system" });
+        const mems = (result.details?.memories as Array<Record<string, unknown>>) || [];
+        const sliced = mems.slice(offset, offset + limit);
         if (opts.json) {
-          console.log(JSON.stringify(result, null, 2));
+          console.log(JSON.stringify({ ...result, details: { ...result.details, count: sliced.length, memories: sliced } }, null, 2));
         } else {
-          for (const item of result.content) {
-            console.log(item.text);
-          }
+          const count = sliced.length;
+          const totalCount = mems.length;
+          const header = count === 1 ? "Found 1 memory:" : `Found ${count} memories (showing ${offset + 1}-${offset + count} of ${totalCount}):`;
+          const lines = sliced.map((m, i) => {
+            return `${i + 1}. [${m.id}] [${m.rawCategory || m.category || "other"}${m.scope ? ":" + m.scope : ""}] ${m.text}`;
+          });
+          console.log([header, "", ...lines].join("\n"));
         }
         process.exit(0);
       }
@@ -278,31 +286,73 @@ program
         console.error("❌ Invalid limit value.");
         process.exit(1);
       }
-      // When --tags is set, use memory_list (paginated scan) + post-filter by
-      // query substring.  This avoids memory_recall's cold-start / reranker
-      // reliability issues for tag-filtered searches.
+      // When --tags is set, use a hybrid strategy:
+      //   1. Try memory_recall (semantic search) with tag post-filter
+      //   2. If tag filter yields 0 results, fall back to listTagScan + token matching
+      // This handles the case where semantic search doesn't surface tagged entries
+      // in its top results, making the tag post-filter too aggressive.
+
       if (opts.tags) {
-        // Scan with a generous limit to find enough tagged entries
-        const listParams: Record<string, unknown> = {
-          limit: searchLimit * 3,
-          offset: 0,
-          tags: opts.tags,
+        // Step 1: semantic search with tag filter
+        const recallParams: Record<string, unknown> = {
+          query, limit: searchLimit, tags: opts.tags,
         };
+        if (opts.scope) recallParams.scope = opts.scope;
+        const recallResult = await runtime.callTool("memory_recall", recallParams, { agentId: "system" });
+
+        // Check if semantic search found any tagged results
+        const recallText = recallResult.content?.[0]?.text || "";
+        const hasResults = /^\s*Found\s+\d+\s+memories?:/im.test(recallText) &&
+          !/^\s*Found\s+0\s+memories?:/im.test(recallText);
+
+        if (hasResults) {
+          // Semantic search succeeded — use its results
+          if (opts.json) {
+            console.log(JSON.stringify(recallResult, null, 2));
+          } else {
+            for (const item of recallResult.content) {
+              console.log(item.text);
+            }
+          }
+          process.exit(0);
+        }
+
+        // Step 2: fallback — listTagScan + token matching
+        const listParams: Record<string, unknown> = { tags: opts.tags };
         if (opts.scope) listParams.scope = opts.scope;
-        if (opts.category) listParams.category = opts.category;
         const listResult = await runtime.callTool("memory_list", listParams, { agentId: "system" });
-        // Post-filter by query substring (case-insensitive)
-        const queryLower = query.toLowerCase();
         const mems = (listResult.details?.memories as Array<Record<string, unknown>>) || [];
+
+        // Tokenize query: Latin words + CJK chars (handles "issue的周期任务")
+        const tokenize = (q: string): string[] => {
+          const tokens: string[] = [];
+          let latin = "";
+          for (const ch of q.toLowerCase()) {
+            if (/[a-z0-9]/.test(ch)) {
+              latin += ch;
+            } else {
+              if (latin) { tokens.push(latin); latin = ""; }
+              if (/[\u4e00-\u9fff]/.test(ch)) tokens.push(ch);
+              else if (ch !== " " && ch !== "\t") tokens.push(ch);
+            }
+          }
+          if (latin) tokens.push(latin);
+          return [...new Set(tokens)];
+        };
+        const queryTokens = tokenize(query);
         const filtered = mems.filter((m) => {
           const text = ((m.text as string) || "").toLowerCase();
-          return text.includes(queryLower);
+          return queryTokens.length === 0 || queryTokens.every((t) => text.includes(t));
         }).slice(0, searchLimit);
+
         const count = filtered.length;
         const header = count === 1 ? "Found 1 memory:" : `Found ${count} memories:`;
         const lines = filtered.map((m, i) => {
-          const text = ((m.text as string) || "").replace(/^【标签:[^】]+】\s*/, "");
-          return `${i + 1}. [${m.id}] [${m.rawCategory || m.category || "other"}${m.scope ? ":" + m.scope : ""}] ${text}`;
+          const rawText = (m.text as string) || "";
+          const tagMatch = rawText.match(/^【标签:([^】]+)】\s*/);
+          const text = rawText.replace(/^【标签:[^】]+】\s*/, "");
+          const tagStr = tagMatch ? `【标签:${tagMatch[1]}】 ` : "";
+          return `${i + 1}. [${m.id}] [${m.rawCategory || m.category || "other"}${m.scope ? ":" + m.scope : ""}] ${tagStr}${text}`;
         });
         const resultText = [header, "", ...lines].join("\n").trim();
         if (opts.json) {
