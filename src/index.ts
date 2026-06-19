@@ -555,17 +555,10 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
           }
         }
 
-        // Strip tag prefixes from result text.
-        // Use original `name` so that even rewritten memory_list calls have prefixes stripped.
-        // No ^ anchor — the plugin formats entries as numbered lines like
-        // "1. [uuid] [cat] 【标签:x】 text" where the tag is mid-line, not at position 0.
-        // The tag prefix format is controlled by our storage code, so this is safe.
-        const STRIP_TAGS_RE = /【标签:[^】]+】\s*/g;
-        for (const item of result.content) {
-          if (typeof item.text === "string") {
-            item.text = item.text.replace(STRIP_TAGS_RE, "");
-          }
-        }
+        // NOTE: No stripTags postprocessing here.
+        // Tag prefixes are part of the stored text and should remain visible in output.
+        // The listTagScan path handles its own tag formatting before returning.
+        // MCP clients that want tag-free text can strip client-side if needed.
       }
 
       return result;
