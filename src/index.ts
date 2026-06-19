@@ -15,9 +15,6 @@ import { createJiti } from "jiti";
 // Types
 // ============================================================================
 
-/** Tag markdown prefix format: 【标签:x,y】 text */
-const TAG_PREFIX_RE = /^【标签:(.+?)】\s*/;
-
 /**
  * Allowed characters in normalized tags:
  *   - ASCII letters / digits / `_` / `-` (\w covers a-zA-Z0-9_)
@@ -51,10 +48,6 @@ export function normalizeTags(tags: string | undefined): string {
   return normalized;
 }
 
-/** Strip tag prefix from text, returning the clean content. */
-function stripTags(text: string): string {
-  return text.replace(TAG_PREFIX_RE, "");
-}
 
 /**
  * Check whether a recall result entry (array of lines) contains a tag prefix
@@ -455,9 +448,7 @@ export async function createMemoryRuntime(options: RuntimeOptions = {}): Promise
         }
 
         // Keep tag prefixes in text — format as "【标签:X】 content" so that
-        // the tag is visible in CLI output.  The downstream stripTags regex
-        // (non-anchored /g) strips tags from normal memory_list/recall results,
-        // but this path returns early before that postprocessing step.
+        // the tag is visible in all output (CLI and MCP clients).
         const TAG_RE = /【标签:([^】]+)】/;
         for (const e of matchedEntries) {
           const m = e.text.match(TAG_RE);
