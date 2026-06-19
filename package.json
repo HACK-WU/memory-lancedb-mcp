@@ -1,6 +1,6 @@
 {
   "name": "memory-lancedb-mcp",
-  "version": "0.1.0-beta",
+  "version": "0.1.1-beta",
   "description": "MCP Server wrapper for memory-lancedb-pro — zero-modification adapter replacing OpenClaw runtime",
   "type": "module",
   "main": "dist/index.js",
